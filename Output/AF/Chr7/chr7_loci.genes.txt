@@ -1,0 +1,9 @@
+# The following table is formatted as tab separated values. 
+#GeneName	GeneId	TranscriptId	BioType	variants_impact_MODIFIER	variants_effect_3_prime_UTR_variant	variants_effect_downstream_gene_variant	variants_effect_intron_variant	variants_effect_upstream_gene_variant
+ENSCHAG00000005023	ENSCHAG00000005023	ENSCHAT00000009266		2	0	0	0	2
+coq5	ENSCHAG00000004902	ENSCHAT00000009029	protein_coding	6	0	1	1	4
+hspb8	ENSCHAG00000005086	ENSCHAT00000009417	protein_coding	2	1	0	1	0
+kremen1	ENSCHAG00000004917	ENSCHAT00000009184	protein_coding	5	0	3	2	0
+si:dkey-1k23.3	ENSCHAG00000005025	ENSCHAT00000009372	protein_coding	3	0	2	0	1
+si:dkey-1k23.3	ENSCHAG00000005025	ENSCHAT00000009392	protein_coding	2	0	2	0	0
+znrf3	ENSCHAG00000004891	ENSCHAT00000009001	protein_coding	4	0	2	2	0

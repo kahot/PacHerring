@@ -1,0 +1,746 @@
+---
+title: "COV scan 3 populations"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(tidyverse)
+library(dplyr)
+library(cowplot)
+library(scales)
+```
+
+# Find regions with high covariances in each population
+* From Temporal Covariance analysis  -output covariances for each time period
+
+## Plot the covariances across the genome  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#Find the regions with a high temporal covariance 
+pops<-c("PWS","TB","SS")
+winsize<-c("50k","100k","250k")
+evens<-paste0("chr",seq(2,26, by=2))
+cov.list<-list()
+covs_all<-list()
+k=1
+for (p in 2: length(pops)){
+    pop<-pops[p]
+    for (i in 1: length(winsize)){
+        iv<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/MD7000_3pops_intervals_",winsize[i],"window.csv"), row.names = 1)
+        if (p==3) {
+            cov23<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/",pop,"_cov23_2017-2006_2006-1996_md7000_",winsize[i],"window.csv"), header = F)
+            covs<-cbind(iv, cov23)
+            colnames(covs)[4]<-c("cov23")
+            covs$index=1:nrow(covs)
+            covs$color<-"col1"
+            covs$color[covs$chrom %in% evens]<-"col2"
+    
+            covs[sapply(covs, is.infinite)] <- NA
+            covs[sapply(covs, is.nan)] <- NA
+            
+            cov.list[[k]]<-covs
+            names(cov.list)[k]<-paste0(pop,"_",winsize[i])    
+            k=k+1
+            
+            y<-min(covs$cov23, na.rm=T)
+            ymin<-ifelse (y<=-0.1,-0.1, y) 
+            ymax<-max(covs$cov23, na.rm=T)
+            ggplot(covs, aes(x=index, y=cov23, color=color))+
+                geom_point(size=1, alpha=0.5)+
+                theme_classic()+
+                ylim(ymin,ymax)+
+                scale_color_manual(values=c("gray70","steelblue"), guide="none")+
+                ylab("Covariance")+xlab('Chromosome')+
+                theme(axis.text.x = element_blank())+
+                ggtitle(paste0(pop," ", winsize[i]," window"))
+            ggsave(paste0("../Output/COV/",pop,"_tempCovs_acrossGenome_",winsize[i], "Window.png"), width = 8, height = 2.7, dpi=300) 
+        }
+        else {
+            cov12<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/",pop,"_cov12_1996-1991_2006-1996_md7000_",winsize[i],"window.csv"), header = F)
+            cov23<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/",pop,"_cov23_2017-2006_2006-1996_md7000_",winsize[i],"window.csv"), header = F)
+            cov13<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/",pop,"_cov13_2017-2006_1996-1991_md7000_",winsize[i],"window.csv"), header = F)
+            covs<-cbind(iv, cov12, cov23,cov13)
+            colnames(covs)[4:6]<-c("cov12","cov23","cov13")
+            covs$index=1:nrow(covs)
+    
+            covs$color<-"col1"
+            covs$color[covs$chrom %in% evens]<-"col2"
+    
+            covs[sapply(covs, is.infinite)] <- NA
+            covs[sapply(covs, is.nan)] <- NA
+            
+            cov.list[[k]]<-covs
+            names(cov.list)[k]<-paste0(pop,"_",winsize[i])    
+            k=k+1
+            covsm<-melt(covs[,c("index","color","cov12","cov23","cov13")], id.vars = c("index", "color"))
+            ymax<-max(covsm$value, na.rm=T)
+            y<-min(covsm$value, na.rm=T)
+            ymin<-ifelse (y<=-0.1,-0.1, y) 
+            ggplot(covsm, aes(x=index, y=value, color=color))+
+                facet_wrap(~variable, nrow=3)+
+                geom_point(size=1, alpha=0.5)+
+                theme_classic()+
+                ylim(ymin,ymax)+
+                scale_color_manual(values=c("gray70","steelblue"), guide="none")+
+                ylab("Covariance")+xlab('Chromosome')+
+                theme(axis.text.x = element_blank())+
+                ggtitle(paste0(pop," ", winsize[i]," window"))
+            ggsave(paste0("../Output/COV/",pop,"_tempCovs_acrossGenome_",winsize[i], "Window.png"), width = 8, height = 8, dpi=300)    
+        }
+    }
+    
+}
+
+
+```
+
+![](../Output/COV/PWS_tempCovs_acrossGenome_100kWindow.png){width=65%}
+
+
+![](../Output/COV/TB_tempCovs_acrossGenome_100kWindow.png){width=65%}   
+
+![](../Output/COV/SS_tempCovs_acrossGenome_100kWindow.png){width=65%}   
+
+![](../Output/COV/PWS_tempCovs_acrossGenome_250kWindow.png){width=65%} 
+
+![](../Output/COV/TB_tempCovs_acrossGenome_250kWindow.png){width=65%} 
+
+![](../Output/COV/SS_tempCovs_acrossGenome_250kWindow.png){width=65%} 
+
+
+
+## Find the outlier regions for each time period  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#find how outliers overlap between different windows
+cov12<-data.frame()
+cov23<-data.frame()
+cov13<-data.frame()
+
+for (i in 1:length(cov.list)){
+ if (grepl("PWS",names(cov.list)[i])|grepl("TB",names(cov.list)[i])){
+    covs<-cov.list[[i]]
+    
+    pop<-gsub("_.+",'', names(cov.list)[i])
+    win<-gsub(paste0(pop,"_"), '', names(cov.list)[i])
+    
+    covs<-covs[order(covs$cov12, decreasing=T),]
+    n<-ceiling(nrow(covs)*0.01) #top1% region
+    covs12_top<-covs[1:n,c(1:4)]
+    covs12_top<-covs12_top[order(covs12_top$chrom, covs12_top$start),]
+    covs12_top$window<-win
+    covs12_top$pop<-pop
+    cov12<-rbind(cov12, covs12_top)
+    
+    covs<-covs[order(covs$cov13, decreasing=T),]
+    n<-ceiling(nrow(covs)*0.01) #top1% region
+    covs13_top<-covs[1:n,c(1:3,6)]
+    covs13_top<-covs13_top[order(covs13_top$chrom, covs13_top$start),]
+    covs13_top$window<-win
+    covs13_top$pop<-pop
+    cov13<-rbind(cov13, covs13_top)
+    
+    covs<-covs[order(covs$cov23, decreasing=T),]
+    n<-ceiling(nrow(covs)*0.01) #top1% region
+    covs23_top<-covs[1:n,c(1:3,5)]
+    covs23_top<-covs23_top[order(covs23_top$chrom, covs23_top$start),]
+    covs23_top$window<-win
+    covs23_top$pop<-pop
+    cov23<-rbind(cov23, covs23_top)
+ }
+ if (grepl("SS",names(cov.list)[i])){
+    covs<-cov.list[[i]]
+    
+    pop<-gsub("_.+",'', names(cov.list)[i])
+    win<-gsub(paste0(pop,"_"), '', names(cov.list)[i])
+    
+    covs<-covs[order(covs$cov23, decreasing=T),]
+    n<-ceiling(nrow(covs)*0.01) #top1% region
+    covs23_top<-covs[1:n,c(1:4)]
+    covs23_top<-covs23_top[order(covs23_top$chrom, covs23_top$start),]
+    covs23_top$window<-win
+    covs23_top$pop<-pop
+    cov23<-rbind(cov23, covs23_top)
+    
+    }
+}
+
+
+write.csv(cov12, "../Output/COV/3pops_top1percent_outlier_regions.cov12.csv",row.names = F)
+write.csv(cov23, "../Output/COV/3pops_top1percent_outlier_regions.cov23.csv",row.names = F)
+write.csv(cov13, "../Output/COV/3pops_top1percent_outlier_regions.cov13.csv",row.names = F)
+
+```
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Create plots with different colors for outliers
+#for COV12 and COV13 for TB and PWS (100K)
+cv<-c("cov12","cov13","cov23")
+winsize<-c("50k","100k","250k")
+
+for (i in 1:length(cv)){
+    if (i==1|i==2){
+        for (w in 1: length(winsize)){
+            #PWS
+            df1<-cov.list[[paste0("PWS_", winsize[w])]]
+            df1<-df1[order(df1[,cv[i]], decreasing=T),]
+            n<-ceiling(nrow(df1)*0.01) #top1% region
+            df1$top1<-"N"
+            df1$top1[1:n]<-"PWS"
+            
+            #tb
+            df2<-cov.list[[paste0("TB_", winsize[w])]]
+            df2<-df2[order(df2[,cv[i]], decreasing=T),]
+            df2$top1<-"N"
+            df2$top1[1:n]<-"TB"
+            
+            co<-rbind(df1, df2)
+    
+            co$chrom<-factor(co$chrom, levels=paste0("chr", 1:26))
+            co$top1<-factor(co$top1, levels=c("PWS","TB","N"))
+            colnames(co)[which(colnames(co)==cv[i])]<-"cov"
+    
+            ymax<-max(co$cov, na.rm=T)
+            ggplot(co, aes(x=start/1000000, y=cov, color=top1))+
+                geom_point(size=0.5)+
+                facet_wrap(~chrom, ncol=4)+
+                theme_classic()+ylim(-0.1,ymax)+
+                scale_color_manual(values=c("deeppink","orange" ,"#ADD8E680"), labels=c("PWS", "TB", ""))+
+                ylab("Covariance")+xlab('Postion (Mb)')+
+                ggtitle(paste0(winsize[w]," window ",cv[i]))+
+                scale_x_continuous(labels = comma)+
+                guides(color = guide_legend(override.aes = list(color=c("deeppink","orange","white")), title=element_text("Top 1%")))
+   
+                ggsave(paste0("../Output/COV/COVscan/",cv[i],"_perChrom_",winsize[w], "Window_Outliers.png"), width = 10, height = 8, dpi=300)
+        }
+       
+    }
+   
+    if (i==3){
+        for (w in 1: length(winsize)){
+        #pws
+        df1<-cov.list[[paste0("PWS_", winsize[w])]]
+        df1<-df1[,c("chrom","start","end","cov23")]
+        df1<-df1[order(df1$cov23, decreasing=T),]
+        n<-ceiling(nrow(df1)*0.01) #top1% region
+        df1$top1<-"N"
+        df1$top1[1:n]<-"PWS"
+    
+        #tb
+        df2<-cov.list[[paste0("TB_", winsize[w])]]
+        df2<-df2[,c("chrom","start","end","cov23")]
+        df2<-df2[order(df2$cov23, decreasing=T),]
+        df2$top1<-"N"
+        df2$top1[1:n]<-"TB"
+    
+        #ss
+        df3<-cov.list[[paste0("SS_", winsize[w])]]
+        df3<-df3[,c("chrom","start","end","cov23")]
+        df3<-df3[order(df3$cov23, decreasing=T),]
+        df3$top1<-"N"
+        df3$top1[1:n]<-"SS"
+
+        co<-rbind(df1,df2,df3)
+
+        co$chrom<-factor(co$chrom, levels=paste0("chr", 1:26))
+        co$top1<-factor(co$top1, levels=c("PWS","TB","SS","N"))
+        ymax<-max(co$cov23, na.rm=T)
+        ggplot(co, aes(x=start/1000000, y=cov23, color=top1))+
+            geom_point(size=0.5)+
+            facet_wrap(~chrom, ncol=4)+
+            theme_classic()+ylim(-0.1,ymax)+
+            ylab("Covariance")+xlab('Postion (Mb)')+
+            ggtitle(paste0(winsize[w]," window ",cv[i]))+
+            scale_x_continuous(labels = comma)+
+            #scale_color_discrete(breaks=c("PWS","SS","TB"))+
+            scale_color_manual(values=c("deeppink","orange",gre,"#ADD8E666"), labels=c("PWS","TB","SS", ""))+
+            guides(color = guide_legend(override.aes = list(color=c("deeppink","orange",gre,         "white")),title=element_text("Top 1% outliers"))) 
+        ggsave(paste0("../Output/COV/COVscan/COV23_3Pops_perChrom_",winsize[w], "Window_Outliers.png"), width = 10, height = 9, dpi=300)
+        }
+    }
+    
+}
+
+
+```
+
+
+
+
+
+
+![](../Output/COV/COVscan/cov12_perChrom_100kWindow_Outliers.png)
+
+![](../Output/COV/COVscan/cov13_perChrom_100kWindow_Outliers.png)
+
+![](../Output/COV/COVscan/cov12_perChrom_250kWindow_Outliers.png) 
+![](../Output/COV/COVscan/cov13_perChrom_250kWindow_Outliers.png) 
+
+
+![](../Output/COV/COVscan/COV23_3Pops_perChrom_100kWindow_Outliers.png)  
+![](../Output/COV/COVscan/COV23_3Pops_perChrom_250kWindow_Outliers.png)  
+
+
+
+
+## Run the snpEff pipeline to find annotation in the outlier regions  
+* Create a script to run SnpEff 
+
+Create VCF files with selected regions & run snpEff  
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#Create bed files
+cv<-c("cov12","cov13","cov23")
+
+for (i in 1:3){
+    df<-read.csv(paste0("../Output/COV/3pops_top1percent_outlier_regions.",cv[i],".csv"))
+    dfp<-df[df$pop=="PWS",]
+    write.table(dfp[,1:3], paste0("../Output/COV/COVscan/PWS_outliers_",cv[i],".bed"),quote = F, row.names = F, col.names = F,sep = "\t")
+    dft<-df[df$pop=="TB",]
+    write.table(dft[,1:3], paste0("../Output/COV/COVscan/TB_outliers_",cv[i],".bed"),quote = F, row.names = F, col.names = F,sep = "\t")
+    
+    if (i==3){
+        dfs<-df[df$pop=="SS",]
+        write.table(dfs[,1:3], paste0("../Output/COV/COVscan/SS_outliers_",cv[i],".bed"),quote = F, row.names = F, col.names = F,sep = "\t")
+        
+    }
+}
+
+
+#create a bash script to run snpEff
+bedfiles<-list.files("../Output/COV/COVscan/", pattern="*.bed")
+
+sink("../COVscan_createVCFs.sh")
+cat("#!/bin/bash \n\n")
+for (i in 1:length(bedfiles)){
+    fname<-gsub(".bed",'', bedfiles[i])
+    cat(paste0("vcftools --gzvcf Data/new_vcf/PH_DP600_7000_minQ20_minMQ30_NS0.5_maf05.vcf.gz --bed Output/COV/COVscan/", bedfiles[i], " --out Output/COV/COVscan/", fname," --recode --keep-INFO-all \n"))
+}
+sink(NULL)  
+
+#create a bash script to run snpEff
+vfiles<-list.files("../Output/COV/COVscan/", pattern=".recode.vcf")
+
+sink("~/programs/snpEff/runsnpEff_cov.sh")
+cat("#!/bin/bash \n\n")
+for (i in 1:length(vfiles)){
+    fname<-gsub(".recode.vcf","",vfiles[i])
+    cat(paste0("java -Xmx8g -jar snpEff.jar Ch_v2.0.2.99 ~/Projects/PacHerring/Output/COV/COVscan/",vfiles[i], " -stats ~/Projects/PacHerring/Output/COV/COVscan/",fname,".html >  ~/Projects/PacHerring/Output/COV/COVscan/Anno.",fname,".vcf \n"))
+    
+    #extract the annotation information
+    cat(paste0("bcftools query -f '%CHROM %POS %INFO/AF %INFO/ANN\\n' ~/Projects/PacHerring/Output/COV/COVscan/Anno.",fname,".vcf > ~/Projects/PacHerring/Output/COV/COVscan/",fname,"_annotation \n\n"))
+
+}
+sink(NULL)  
+
+```
+
+```{bash eval=FALSE, include=FALSE}
+cd ~/Projects/PacHerring
+bash COVscan_createVCFs.sh
+
+cd ~/programs/snpEff
+bash runsnpEff_cov/sh
+```
+
+
+### Create summary gene files from snpEff and check overlapping genes.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+## Create summary files of snpEff results (gene annotations in the regions of interest) and reformat as a ShinyGo input 
+
+#create gene list 
+gfiles<-list.files("../Output/COV/COVscan/", pattern="genes.txt")
+
+for (i in 1:length(gfiles)){
+    df<-read.table(paste0("../Output/COV/COVscan/",gfiles[i]), sep="\t")
+    df<-df[,1:7]
+    colnames(df)<-c("GeneName","GeneId","TranscriptId","BioType","variants_impact_HIGH","variants_impact_LOW",	"variants_impact_MODERATE")
+    
+    fname<-gsub(".genes.txt","",gfiles[i])
+    genes<-unique(df$GeneId)
+    sink(paste0("../Output/COV/COVscan/geneIDlist_",fname,".txt"))
+    cat(paste0(genes,"; "))
+    sink(NULL)
+}
+
+# Find the intersecting gene names across populations
+
+gfiles2<-list.files("../Output/COV/COVscan/", pattern="geneIDlist")
+glist<-list()
+for (i in 1:length(gfiles)){
+    df<-read.table(paste0("../Output/COV/COVscan/",gfiles2[i]), sep=";")
+    df<-t(df)
+    df<-gsub(" ","",df)
+    df2<-df[!is.na(df)]
+    vname<-gsub(".txt","",gfiles2[i],)
+    vname<-gsub("geneIDlist_","", vname)
+    glist[[i]]<-df2
+    names(glist)[i]<-vname
+}
+
+times<-c("cov12","cov13","cov23")
+common<-list()
+common_genes<-data.frame(time=times)
+for (i in 1:2){
+    tlist<-glist[grep(times[i], names(glist))]
+    if (i !=3){
+        common[[i]]<-intersect(tlist[[1]], tlist[[2]])
+        names(common)[[i]]<-times[i]
+        common_genes$PWS[i]<-length(tlist[[grep("PWS", names(tlist))]])
+        common_genes$TB[i]<-length(tlist[[grep("TB", names(tlist))]])
+        common_genes$SS[i]<-NA
+        common_genes$common_PWS.TB[i]<-length(intersect(tlist[[1]], tlist[[2]]))
+    }
+    if (i==3){
+        common_genes$PWS[i]<-length(tlist[[grep("PWS", names(tlist))]])
+        common_genes$TB[i]<-length(tlist[[grep("TB", names(tlist))]])
+        common_genes$SS[i]<-length(tlist[[grep("SS", names(tlist))]])
+        common_genes$common_PWS.TB[i]<-length(intersect(tlist[[1]], tlist[[3]]))
+        common_genes$common_PWS.SS[i]<-length(intersect(tlist[[1]], tlist[[2]]))
+        common_genes$common_SS.TB[i]<-length(intersect(tlist[[2]], tlist[[3]]))
+        common_genes$common3[i]<-length(intersect(tlist[[1]],intersect(tlist[[2]], tlist[[3]])))
+        k=i
+        common[[k]]<-intersect(tlist[[1]], tlist[[2]])
+        names(common)[[k]]<-paste0(times[i],"_PWS.SS")
+        k=k+1
+        common[[k]]<-intersect(tlist[[1]], tlist[[3]])
+        names(common)[[k]]<-paste0(times[i],"_PWS.TB")
+        k=k+1
+        common[[k]]<-intersect(tlist[[2]], tlist[[3]])
+        names(common)[[k]]<-paste0(times[i],"_SS.TB")
+        k=k+1
+        common[[k]]<-intersect(tlist[[1]],intersect(tlist[[2]], tlist[[3]]))
+        names(common)[[k]]<-paste0(times[i],"_3pops")
+        }
+    }
+}
+    
+write.csv(common_genes, "../Output/COV/COVscan/Common_genes_3pops.csv")
+
+#What are the overlapping gene names
+
+#aggregate all gene names
+Genes<-data.frame()
+for (i in 1:length(gfiles)){
+    df<-read.table(paste0("../Output/COV/COVscan/",gfiles[i]), sep="\t")
+    df<-df[,1:2]
+    colnames(df)<-c("GeneName","GeneId")
+    df<-df[!duplicated(df),]
+    Genes<-rbind(Genes, df)
+    Genes<-Genes[!duplicated(Genes),]
+}
+
+for (i in 1: length(common)){
+    gids<-common[[i]]
+    df<-data.frame(GeneId=gids)
+    
+    df<-merge(df, Genes, by="GeneId")
+    write.csv(df, paste0("../Output/COV/COVscan/Common_genes_", names(common)[i],".csv"), row.names = F)
+    
+}
+
+```
+
+#### Overlapping gene numbers   
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+# Summary table
+common_genes<-read.csv("../Output/COV/COVscan/Common_genes_3pops.csv", row.names = 1)
+knitr::kable(common_genes)
+
+```
+
+#### Overlapping regions
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Find the overlapping regions where the 4 genes belong to:
+cov23_all<-read.csv("../Output/COV/3pops_top1percent_outlier_regions.cov23.csv")
+cov23_all<-cov23_all[cov23_all$window=="100k",]
+pws<-cov23_all[cov23_all$pop=="PWS",]
+tb<-cov23_all[cov23_all$pop=="TB",]
+ss<-cov23_all[cov23_all$pop=="SS",]
+
+#Overlap between PWS and TB
+pws$id<-paste0(pws$chrom,"_",pws$start)
+tb$id<-paste0(tb$chrom,"_",tb$start)
+ss$id<-paste0(ss$chrom,"_",ss$start)
+intersect(pws$id, tb$id) 
+#[1] "chr13_29200000" "chr16_6400000"  "chr16_26800000" "chr18_2800000"  "chr18_12700000" "chr20_7500000" 
+#[7] "chr5_13400000"  "chr9_25600000" 
+#8 regions exactly match
+
+intersect(pws$id, ss$id) 
+# "chr10_10900000" "chr12_28500000" "chr18_2800000"  "chr25_1100000"  "chr3_20200000"  "chr4_31000000" 
+
+intersect(tb$id, ss$id) 
+#"chr13_22800000" "chr14_3300000"  "chr17_9700000"  "chr18_2800000"  "chr2_900000"   
+
+intersect(pws$id, intersect(ss$id, tb$id))
+#chr18_2800000"
+
+
+#### Check chromosome region overlap +-100,000 bases
+
+overlps<-data.frame()
+overlps2<-data.frame()
+for (i in 1: nrow(pws)){
+    re2<-tb[tb$chrom==pws$chrom[i],]
+    if (nrow(re2)>=1){
+        for (j in 1: nrow(re2)){
+            if (re2$start[j]<=pws$start[i]+100000 & re2$start[j]>=pws$start[i]-100000){
+                overlps<-rbind(overlps, re2[j,])
+                overlps2<-rbind(overlps2,pws[i,])}
+    }}
+}      
+
+
+#Overlapping windows:
+ov<-data.frame(id=overlps$id)
+for (i in 1: nrow(overlps)){
+    if (overlps$start[i]<overlps2$start[i]) {ov$start[i]<-overlps$start[i]; ov$end[i]<-overlps2$end[i]}
+    if (overlps$start[i]>=overlps2$start[i]) {ov$start[i]<-overlps2$start[i];ov$end[i]<-overlps$end[i]}
+}
+write.csv(ov, "../Output/COV/COVscan/Overlap_regions_COV23_PWS.TB_plusminus100k.csv", row.names = F)
+
+
+#### Check chromosome region overlap +-200,000 bases
+overlps<-data.frame()
+overlps2<-data.frame()
+for (i in 1: nrow(pws)){
+    re2<-tb[tb$chrom==pws$chrom[i],]
+    if (nrow(re2)>=1){
+        for (j in 1: nrow(re2)){
+            if (re2$start[j]<=pws$start[i]+200000 & re2$start[j]>=pws$start[i]-200000){
+                overlps<-rbind(overlps, re2[j,])
+                overlps2<-rbind(overlps2,pws[i,])}
+    }}
+}      
+
+#Overlapping windows:
+ov<-data.frame(id=overlps$id)
+for (i in 1: nrow(overlps)){
+    if (overlps$start[i]<overlps2$start[i]) {ov$start[i]<-overlps$start[i]; ov$end[i]<-overlps2$end[i]}
+    if (overlps$start[i]>=overlps2$start[i]) {ov$start[i]<-overlps2$start[i];ov$end[i]<-overlps$end[i]}
+}
+write.csv(ov, "../Output/COV/COVscan/Overlap_regions_COV23_PWS.TBplusminus200k.csv", row.names = F)
+
+## PWS and SS
+#### Check chromosome region overlap +-200,000 bases
+overlps<-data.frame()
+overlps2<-data.frame()
+for (i in 1: nrow(pws)){
+    re2<-ss[ss$chrom==pws$chrom[i],]
+    if (nrow(re2)>=1){
+        for (j in 1: nrow(re2)){
+            if (re2$start[j]<=pws$start[i]+200000 & re2$start[j]>=pws$start[i]-200000){
+                overlps<-rbind(overlps, re2[j,])
+                overlps2<-rbind(overlps2,pws[i,])}
+    }}
+}      
+
+#Overlapping windows:
+ov<-data.frame(id=overlps$id)
+for (i in 1: nrow(overlps)){
+    if (overlps$start[i]<overlps2$start[i]) {ov$start[i]<-overlps$start[i]; ov$end[i]<-overlps2$end[i]}
+    if (overlps$start[i]>=overlps2$start[i]) {ov$start[i]<-overlps2$start[i];ov$end[i]<-overlps$end[i]}
+}
+write.csv(ov, "../Output/COV/COVscan/Overlap_regions_COV23_PWS.SSplusminus200k.csv", row.names = F)
+
+## SS and TB
+#### Check chromosome region overlap +-200,000 bases
+overlps<-data.frame()
+overlps2<-data.frame()
+for (i in 1: nrow(pws)){
+    re2<-ss[ss$chrom==tb$chrom[i],]
+    if (nrow(re2)>=1){
+        for (j in 1: nrow(re2)){
+            if (re2$start[j]<=tb$start[i]+200000 & re2$start[j]>=tb$start[i]-200000){
+                overlps<-rbind(overlps, re2[j,])
+                overlps2<-rbind(overlps2,tb[i,])}
+    }}
+}      
+#Overlapping windows:
+ov<-data.frame(id=overlps$id)
+for (i in 1: nrow(overlps)){
+    if (overlps$start[i]<overlps2$start[i]) {ov$start[i]<-overlps$start[i]; ov$end[i]<-overlps2$end[i]}
+    if (overlps$start[i]>=overlps2$start[i]) {ov$start[i]<-overlps2$start[i];ov$end[i]<-overlps$end[i]}
+}
+write.csv(ov, "../Output/COV/COVscan/Overlap_regions_COV23_SS.TBplusminus200k.csv", row.names = F)
+
+
+## PWS, SS and TB
+#### Check chromosome region overlap +-200,000 bases
+overlppw<-data.frame()
+overlpss<-data.frame()
+overlptb<-data.frame()
+for (i in 1: nrow(pws)){
+    re2<-ss[ss$chrom==pws$chrom[i],]
+    re3<-tb[tb$chrom==pws$chrom[i],]
+    
+    if (nrow(re2)>=1& nrow(re3)>=1){
+        for (j in 1: nrow(re2)){
+            if (re2$start[j]<=pws$start[i]+200000 & re2$start[j]>=pws$start[i]-200000){
+                for (k in 1: nrow(re3)){
+                    if (re3$start[k]<=pws$start[i]+200000 & re3$start[k]>=pws$start[i]-200000){
+                    overlpss<-rbind(overlpss, re2[j,])
+                    overlptb<-rbind(overlptb, re3[k,])
+                    overlppw<-rbind(overlppw,pws[i,])}
+                }
+            }
+    }}
+}      
+
+ov<-overlpss[-3,]
+ov$end[2]<-27000000
+ov<-ov[,c(1:4,6)]
+ov<-rbind(ov,ov,ov)
+ov$pop[5:8]<-"PWS"
+ov$pop[9:12]<-"TB"
+ov$cov23[5:8]<-overlppw[c(1,2,4,5),"cov23"]
+ov$cov23[9:12]<-overlptb[c(1,2,4,5),"cov23"]
+
+write.csv(ov[,1:3], "../Output/COV/COVscan/Overlap_regions_COV23_3Pops_plusminus200k.csv", row.names = F)
+
+sink("../Output/COV/COVscan/overlap_cov23_3pop.bed")
+cat("track type=bedGraph \n")
+options(scipen=999)
+for (i in 1:4){
+    cat(paste0(ov$chrom[i],"\t",ov$start[i], "\t", ov$end[i], "\n"))
+}
+sink(NULL)
+
+p23_ano<-read.table("../Output/COV/COVscan/PWS_outliers_cov23_annotation", sep=" ")
+p23_ano2<-read.table("../Output/COV/COVscan/SS_outliers_cov23_annotation", sep=" ")
+p23_ano3<-read.table("../Output/COV/COVscan/TB_outliers_cov23_annotation", sep=" ")
+
+common<-p23_ano[p23_ano$V1 %in% ov$chrom,]
+common2<-p23_ano2[p23_ano2$V1 %in% ov$chrom,]
+common3<-p23_ano3[p23_ano3$V1 %in% ov$chrom,]
+
+common<-rbind(common, common2, common3)
+common<-common[!duplicated(common),]
+
+genes<-data.frame()
+for (i in 1:4){
+    df<-common[common$V2>=ov$start[i] & common$V2<=ov$end[i] & common$V1==ov$chrom[i],]
+    genes<-rbind(genes,df)
+}
+
+# Perse the gene info
+annotations<-data.frame()
+for (i in 1: nrow(genes)){
+    anns<-unlist(strsplit(genes$V4[i], "\\,|\\|"))
+    annm<-data.frame(matrix(anns,ncol = 16, byrow = TRUE))
+    annm<-annm[,c(2,3,4,5,8)]
+    colnames(annm)<-c("Effect","Putative_impact","Gene_name","Gene_ID","Feature type")
+    annm<-annm[!duplicated(annm), ]
+    annm$chr<-genes$V1[i]
+    annm$pos<-genes$V2[i]
+    annm$AF<-genes$V3[i]
+    annotations<-rbind(annotations, annm)
+}     
+annotations <-annotations[!duplicated(annotations), ]
+annotations<-annotations[,c(6:8,1:5)]
+
+write.csv(annotations, "../Output/COV/COVscan/Genes_PWSonly_outliers_100k_cov12.csv", row.names = F)
+annotations<-cbind(df[,1:2], annotations)
+colnames(annotations)<-c("chr", "pos", "Annotation","Putative_impact","Gene_name", "Gene_ID", "Transcript_biotype","Annotation2","Putative_impact2","Gene_name2", "Gene_ID2", "Transcript_biotype2")
+
+
+ano<-annotations[!(duplicated(annotations[,3:6])),]
+focus<-ano[ano$pos>=26425000& ano$pos<=26490000,]
+write.csv(focus, "../Output/PCA/genes/Chr20_genes_in_26.4-26.6M.csv")
+
+
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+## Check chromosome overlap
+
+
+
+
+```
+
+
+
+# Compare results from PWSonly and PH-3pops VCF files
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pws1<-read.csv("../Output/COV/PWSonly_top1percent_outlier_cov12_overlap.csv")
+pws1<-pws1[pws1$window=="100k",]
+pws2<-read.csv("../Output/COV/3pops_top1percent_outlier_regions.cov12.csv")
+pws2<-pws2[pws2$pop=="PWS"&pws2$window=="100k",]
+
+pws1$vcf<-"PWSonly"
+pws2$vcf<-"3Pops"
+
+pws<-rbind(pws1[,c("chrom","start","end","cov12","vcf")],pws2[,c("chrom","start","end","cov12","vcf")])
+ggplot(data=pws,aes(x=start, y=cov12, color=vcf, fill=vcf))+
+    facet_wrap(~chrom)+
+    geom_point()+
+    ggtitle("PWS COV12")
+ggsave("../Output/COV/COVscan/PWSonly_3Pops_Outlier_overlap_cov12.png", width = 10, height = 8, dpi=300)
+    
+pws1<-read.csv("../Output/COV/PWSonly_top1percent_outlier_cov23_overlap.csv")
+pws1<-pws1[pws1$window=="100k",]
+pws2<-read.csv("../Output/COV/3pops_top1percent_outlier_regions.cov23.csv")
+pws2<-pws2[pws2$pop=="PWS"&pws2$window=="100k",]
+
+pws1$vcf<-"PWSonly"
+pws2$vcf<-"3Pops"
+
+pws<-rbind(pws1[,c("chrom","start","end","cov23","vcf")],pws2[,c("chrom","start","end","cov23","vcf")])
+ggplot(data=pws,aes(x=start, y=cov23, color=vcf, fill=vcf))+
+    facet_wrap(~chrom)+
+    geom_point()+
+    ggtitle("PWS COV23")
+ggsave("../Output/COV/COVscan/PWSonly_3Pops_Outlier_overlap_cov23.png", width = 10, height = 8, dpi=300)
+    
+pws1<-read.csv("../Output/COV/PWSonly_top1percent_outlier_cov13_overlap.csv")
+pws1<-pws1[pws1$window=="100k",]
+pws2<-read.csv("../Output/COV/3pops_top1percent_outlier_regions.cov13.csv")
+pws2<-pws2[pws2$pop=="PWS"&pws2$window=="100k",]
+
+pws1$vcf<-"PWSonly"
+pws2$vcf<-"3Pops"
+
+pws<-rbind(pws1[,c("chrom","start","end","cov13","vcf")],pws2[,c("chrom","start","end","cov13","vcf")])
+ggplot(data=pws,aes(x=start, y=cov13, color=vcf, fill=vcf))+
+    facet_wrap(~chrom)+
+    geom_point()+
+    ggtitle("PWS COV13")
+ggsave("../Output/COV/COVscan/PWSonly_3Pops_Outlier_overlap_cov13.png", width = 10, height = 8, dpi=300)
+
+```
+![](../Output/COV/COVscan/PWSonly_3Pops_Outlier_overlap_cov12.png)
+
+![](../Output/COV/COVscan/PWSonly_3Pops_Outlier_overlap_cov23.png)
+
+![](../Output/COV/COVscan/PWSonly_3Pops_Outlier_overlap_cov13.png)
+
+# Find 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+```
+

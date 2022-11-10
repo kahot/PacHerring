@@ -1,0 +1,157 @@
+---
+title: "GONE"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: false
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+
+# Run the demography program GONE 
+###     GONE by Santiago et al. 2020 [link to the paper](https://doi.org/10.1093/molbev/msaa169)
+
+### 1. Prepare files to be run with GONE 
+
+```{bash eval=FALSE, message=FALSE, warning=FALSE}
+# Subset maf00 (no maf filtering) to individual populations
+# (Subset.vcf.sh) Using 2017 population
+bcftools view -Oz -S /home/ktist/ph/data/new_vcf/MD7000/population/PWS17.txt --threads 16 /home/ktist/ph/data/new_vcf/MD7000/PH_DP600_7000_minQ20_minMQ30_NS0.5.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/PWS17_MD7000_maf00.vcf.gz
+
+
+# Run plink to create .map and .bed files from vcf files (no maf filtering)
+(makePlinkFiles2.sh)
+plink --vcf /home/ktist/ph/data/new_vcf/MD7000/PWS17_MD7000_maf00.vcf.gz --make-bed --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWS17_maf00
+
+plink --bfile  /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWS17_maf00 --recode --tab --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWS17_maf00
+
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Add SNP names to each map file (the current vcf files do not have snp ID)
+df<-read.table("../Data/plink/PWS17_maf00.map")
+df$V2<-paste0("snp",1:nrow(df))
+write.table(df, "../Data/plink/PWS17_maf00.map", quote=F, sep="\t", col.names=F, row.names=F)
+```
+
+```{bash eval=FALSE, message=FALSE, warning=FALSE}
+#Copy and rename as PWS17_maf00.map, SS17_maf00.map,TB17_maf00.map (.map file is the same for all)
+cp ~/Projects/PacHerring/Data/plink/PWS17_maf00.map ~/Projects/PacHerring/Data/plink/SS17_maf00.map
+cp ~/Projects/PacHerring/Data/plink/PWS17_maf00.map ~/Projects/PacHerring/Data/plink/TB17_maf00.map
+
+# Modify the INPUT_PARAMETERS_FILE as needed
+#Run with default (may need to modify hc=0.05 to hc=0.01 for populations with recent migrants)
+
+#FID and SID are swapped for herring vcf data. Swap the first 2 columns (this will create a space-delimited file but the example file is also space-delimited. It may work)
+awk ' { t = $1; $1 = $2; $2 = t; print; } ' PWS17_maf00.ped >  PWS17_maf00_new.ped
+awk ' { t = $1; $1 = $2; $2 = t; print; } ' SS17_maf00.ped >  SS17_maf00_new.ped
+awk ' { t = $1; $1 = $2; $2 = t; print; } ' TB17_maf00.ped >  TB17_maf00_new.ped
+
+```
+
+### 2. Run GONE
+```{bash eval=FALSE, message=FALSE, warning=FALSE}
+# Run in the GONE/MacOSX/ directory (changed script_GONE.sh line 63 and 67: grep -w "" wasn't working)
+bash script_GONE.sh PWS17_maf00
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#inport the output file
+library(ggplot2)
+ne<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/PWS17_hc0.05/Output_Ne_PWS17_maf00", skip=1, header=T)
+
+ggplot(ne, aes(x=Generation, y=Geometric_mean))+
+    geom_line()+ylab("Ne")+theme_bw()
+ggsave("../Output/Ne/Gone/PWS_recent_ne.by.Gone.png", width = 6, height = 4, dpi=300)
+# From tutorial: "unbiased estimates require that the population is a closed one without recent admixture from other populations. If this is not the case, some artefacts may arise."
+# "the reliable estimates to be considered should be for a maximum of 100 or 200 generations"
+```
+
+![](../Output/Ne/Gone/PWS_recent_ne.by.Gone.png)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Run with hc=0.01 (recomibnation -recommended for the admix population, instead of hc=0.05)
+
+ne2<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/PWS17_hc0.01/Output_Ne_PWS17_maf00", skip=1, header=T)
+
+ggplot(ne2, aes(x=Generation, y=Geometric_mean))+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,200)+
+    ggtitle("PWS17")
+ggsave("../Output/Ne/Gone/PWS_recent_ne.by.Gone_hc0.01.png", width = 6, height = 4, dpi=300)
+#mostly same
+```
+
+![](../Output/Ne/Gone/PWS_recent_ne.by.Gone_hc0.01.png)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+neS<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/Output_Ne_SS17_maf00", skip=1, header=T)
+
+ggplot(neS, aes(x=Generation, y=Geometric_mean))+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+
+    ggtitle("SS17")
+ggsave("../Output/Ne/Gone/SS_recent_ne.by.Gone_hc0.01.png", width = 6, height = 4, dpi=300)
+#
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+neT<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/Output_Ne_TB17_maf00", skip=1, header=T)
+
+ggplot(neT, aes(x=Generation, y=Geometric_mean))+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+
+    ggtitle("TB17")
+ggsave("../Output/Ne/Gone/SS_recent_ne.by.Gone.png", width = 6, height = 4, dpi=300)
+```
+![](../Output/Ne/Gone/SS_recent_ne.by.Gone.png)
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#plot together
+
+ne$pop<-"PWS"
+neS$pop<-"SS"
+neT$pop<-"TB"
+ne<-rbind(ne, neS,neT)
+
+ggplot(ne, aes(x=Generation, y=Geometric_mean, color=pop))+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+
+    ggtitle("2017 Data")+
+    theme(legend.title = element_blank())
+ggsave("../Output/Ne/Gone/3pop2017_recent_ne.by.Gone.png", width = 6.5, height = 4, dpi=300)
+```
+![](../Output/Ne/Gone/3pop2017_recent_ne.by.Gone.png)
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#PWS96
+ne1<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/Output_Ne_PWS96_maf00", skip=1, header=T)
+ne2<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/Output_Ne_SS96_maf00", skip=1, header=T)
+ne3<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/Output_Ne_TB96_maf00", skip=1, header=T)
+
+ne1$pop<-"PWS"
+ne2$pop<-"SS"
+ne3$pop<-"TB"
+
+neall<-rbind(ne1,ne2,ne3)
+ggplot(neall, aes(x=Generation, y=Geometric_mean, color=pop))+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+
+    ggtitle("1996 Data")+theme(legend.title = element_blank())
+ggsave("../Output/Ne/Gone/3pop1996_recent_ne.by.Gone.png", width = 6.5, height = 4, dpi=300)
+
+ggplot(neall, aes(x=Generation, y=Geometric_mean, color=pop))+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+ylim(4000000,5000000)
+    ggtitle("1996 Data")+theme(legend.title = element_blank())
+ggsave("../Output/Ne/Gone/3pop1996_recent_ne.by.Gone_yscaled.png", width = 6.5, height = 4, dpi=300)
+#mostly same
+```
+![](../Output/Ne/Gone/3pop1996_recent_ne.by.Gone.png)
+
+
+![](../Output/Ne/Gone/3pop1996_recent_ne.by.Gone.png)
+
+

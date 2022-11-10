@@ -1,0 +1,2112 @@
+---
+title: "SFS"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+
+---
+```{r eval=FALSE, include=FALSE}
+toc = table of contents
+
+```
+
+```{r message=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(cowplot)
+library(RColorBrewer)
+```
+
+
+# Estiamte SFS with all individuals and all sites
+
+(estimated by each chromosome and combine them later) (5.26.22~)  
+
+Step 1: Run PWS07_sfs_step1.sh (in "/Data/Slurumscripts/SFS_fromBam/PWS07_sfs_step1.sh") for each population (takes a long time to create a saf file)  
+<br>
+
+Step 2: Run PWS07_sfs_step2.sh to create unfolded sfs for each chromosome (Can't run the whole genome due to memory constraints)  
+<br> 
+
+Step 2.2: Run PWS07_sfs_step2_folded.sh to create folded sfs for each chromosome   
+<br>
+
+Step 3: Run R scripts to combine all sfs into 1
+
+```{bash message=FALSE, warning=FALSE}
+# at FARM, run the following scripts to combine sfs files
+module load R
+R
+source("combineSFSfold.R") 
+source("combineSFSunfold.R") 
+combineSFSunfold("PWS07")   # this will create a "PWS07_unfolded.sfs" in /home/ktist/ph/data/angsd/SFS/fromBam/
+combineSFSfold("PWS07")   # this will create a "PWS07_folded.sfs" in /home/ktist/ph/data/angsd/SFS/fromBam/folded/
+
+#Exit R by typing 
+quit()
+```
+
+    
+Locally, you can run here:
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+combineSFSfold<-function(pop){
+    ch1<-scan(paste0("Data/new_vcf/angsd/fromBam/folded/",pop,"_folded_chr1.sfs"))
+    pws.sfs<-data.frame(chr1=ch1)
+    for (i in 2:26){
+        vec<-scan(paste0("Data/new_vcf/angsd/fromBam/folded/",pop,"_folded_chr",i,".sfs"))
+        pws.sfs[,paste0("chr",i)]<-vec
+    }
+    pws.sfs$sum<-rowSums(pws.sfs)
+    sink(paste0("Data/new_vcf/angsd/fromBam/folded/",pop,"_folded.sfs"))
+    cat(pws.sfs$sum)
+    sink(NULL)
+}
+
+combineSFSunfold<-function(pop){
+    ch1<-scan(paste0("Data/new_vcf/angsd/fromBam/unfolded/",pop,"_unfolded_chr1.sfs"))
+    pws.sfs<-data.frame(chr1=ch1)
+    for (i in 2:26){
+        vec<-scan(paste0("Data/new_vcf/angsd/fromBam/unfolded/",pop,"_unfolded_chr",i,".sfs"))
+        pws.sfs[,paste0("chr",i)]<-vec
+    }
+    pws.sfs$sum<-rowSums(pws.sfs)
+    sink(paste0("Data/new_vcf/angsd/fromBam/unfolded/",pop,"_unfolded.sfs"))
+    cat(pws.sfs$sum)
+    sink(NULL)
+}
+
+#Run with the 'pop' identifier
+combineSFSunfold("PWS07")
+combineSFSfold("PWS07")
+
+```
+
+Step 4: Run PWS07_sfs_theta.sh to calculate theta and Tajima's D for unfolded.sfs (Fay & Wu's H should be used with unfolded sfs)  
+
+Step 4.2: Run PWS07_sfs_step3_folded.sh to calculate theta and Tajima's D for folded.sfs (Tajima's D should be used with folded sfs)  
+
+## SFS from bam files {.tabset}
+
+### 1DSFS PWS
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+source("../Rscripts/BaseScripts.R")
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+
+sfs1D<-data.frame()
+for (i in 1:length(pops)){
+    sfs <- scan(paste0("../Data/new_vcf/angsd/fromBam/combined/",pops[i],"_unfolded.sfs"))
+    sfs1 <- data.frame(ac=sfs)
+    sfs1$count<-0:(nrow(sfs1)-1)
+    #remove the invariable sites
+    sfs1<-sfs1[-c(1,nrow(sfs1)),]
+    sfs1$pop<-pops[i]
+    sfs1D<-rbind(sfs1D, sfs1)
+}
+    
+sfs1D$pop<-factor(sfs1D$pop, levels=pops)
+ggplot(data=sfs1D, aes(x=count, y=ac))+
+    facet_wrap(~pop, ncol=4)+
+        geom_bar(stat="identity", color="gray")+xlab("Frequency bin")+ ylab("Number of alleles")+
+        theme_classic()+
+        scale_y_continuous(labels=scales::comma)+
+        theme(strip.background = element_rect(
+            color="black", fill="gray80", size=0.5, linetype="solid"))
+ggsave("../Output/SFS/1DSFS_fromBam_PWS.png", width = 11, height = 2.2, dpi=300)
+```
+![](../Output/SFS/1DSFS_fromBam_PWS.png)
+
+### Pi (π)
+
+```{r message=FALSE, warning=FALSE, class.source = 'fold-show'}
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+theta<-data.frame()
+for (i in 1:length(pops)){
+    theta2<-read.delim(paste0('../Data/new_vcf/angsd/fromBam/unfolded/',pops[i],'_50kwin_10kstep.pestPG'))
+    theta2$pi<-theta2$tP/theta2$nSites
+    df<-theta2[,c("Chr","WinCenter","pi","fayh" )]
+    df$pop<-pops[i]    
+    theta<-rbind(theta, df)
+}
+
+#mean pi and Fay's H  (from unfolded SFS)
+theta$pop<-factor(theta$pop, levels=pops)
+
+ggplot(theta, aes(x=pop, y=pi))+
+    geom_boxplot(position=position_dodge(width = 0.8), color=blu, outlier.alpha = 0.6,outlier.size = 0.7,width=0.6)+
+    geom_point(stat = "summary", fun = "mean",position=position_dodge(width = 0.8))+
+    ylab(expression(pi))+xlab("")+
+    theme_bw()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5,2.5,3.5), color="gray", size=0.5)
+ggsave("../Output/SFS/Pi_estimates_PWS_fromBam.png", width = 5, height = 3.5)
+```
+
+![](../Output/SFS/Pi_estimates_PWS_fromBam.png){width=50%}  
+
+### Fay's H
+
+```{r message=FALSE, warning=FALSE, class.source = 'fold-show'}
+ggplot(theta, aes(x=pop, y=fayh))+
+    geom_boxplot(position=position_dodge(width = 0.8), color=grb, outlier.alpha = 0.6,outlier.size = 0.7,width=0.6)+
+    geom_point(stat = "summary", fun = "mean",position=position_dodge(width = 0.8))+
+    ylab("Fay's H")+xlab("")+
+    theme_bw()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5,2.5,3.5), color="gray", size=0.5)
+ggsave("../Output/SFS/FayH_estimates_PWS_fromBam.png", width = 5, height = 3.5)
+```
+![](../Output/SFS/FayH_estimates_PWS_fromBam.png){width=50%}
+
+
+
+### Tajima's D
+
+```{r message=FALSE, warning=FALSE, class.source = 'fold-show'}
+
+#Tajima's D (folded SFS)
+theta<-data.frame()
+for (i in 1:length(pops)){
+    theta2<-read.delim(paste0('../Data/new_vcf/angsd/fromBam/folded/',pops[i],'_50kwin_10kstep.pestPG'))
+    df<-theta2[,c("Chr","WinCenter","Tajima" )]
+    df$pop<-pops[i]    
+    theta<-rbind(theta, df)
+}
+
+theta$pop<-factor(theta$pop, levels=pops)
+ggplot(theta, aes(x=pop, y=Tajima))+
+    geom_boxplot(position=position_dodge(width = 0.8), color=org, outlier.alpha = 0.6,outlier.size = 0.7,width=0.6)+
+    geom_point(stat = "summary", fun = "mean",position=position_dodge(width = 0.8))+
+    ylab("Tajima's D")+xlab("")+
+    theme_bw()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5,2.5,3.5), color="gray", size=0.5)
+ggsave("../Output/SFS/TajimaD_PWS_fromBam.png", width = 5, height = 3.5)
+
+```
+![](../Output/SFS/TajimaD_PWS_fromBam.png){width=50%}
+
+## Estimate SFS from VCF files 
+(Using maf0.00 -no low allele freq cutoff)
+
+Step 1: Run BC17_angsd_SFS.sh (in "/Data/Slurumscripts/SFS_fromVCFmaf00/") for each population - this will calculate sfs, theta for both folded and unfolded SFS. 
+
+Step 2: Create 2D SFS by running each combination (ex. BC17CA172DSFS.sh in "/Data/Slurumscripts/SFS_fromVCFmaf00/") 
+
+Step 3: Calculate Fst/Pbs for population combinations by running 3DFst scripts (ex. 3DFst_pws1.sh) 
+
+```{r message=FALSE, warning=FALSE}
+#Plot 2D SFS (Sfs_comparison.R)
+source("../Rscripts/BaseScripts.R")
+
+## 2D SFS
+# The output from ANGSD is a flatten matrix: each value is the count of sites with the corresponding joint frequency ordered as
+# [0,0] [0,1] [0,2] ..
+
+# function to create a matrix from ANGSD output (a flatten matrix)
+vec2mat<-function(vec, n1,n2, pop1, pop2){
+    n1<-n1
+    n2<-n2
+    pop1<-pop1
+    pop2<-pop2
+    ANGSD.2D.SFS <- scan(paste(vec, sep=""), quiet=T)
+    ANGSD.2D.SFS <- t(matrix(ANGSD.2D.SFS, nrow=n2*2+1, ncol=n1*2+1))
+    # mask non-variant sites
+    ANGSD.2D.SFS[1,1] <- 0
+    ANGSD.2D.SFS[nrow(ANGSD.2D.SFS),ncol(ANGSD.2D.SFS)] <- 0
+    df<-data.frame(ANGSD.2D.SFS)
+    colnames(df)<-0:(ncol(df)-1)
+    df$count<-0:(nrow(df)-1)
+    return(df)
+}
+
+#Plot 2D SFS heatmap     
+pops.info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops.info$yr<-''
+pops.info$yr[pops.info$year==96|pops.info$year==91]<-paste0(19,pops.info$year[pops.info$year==96|pops.info$year==91])
+pops.info$yr[pops.info$year==07|pops.info$year==06|pops.info$year==17]<-paste0(20,pops.info$year[pops.info$year==07|pops.info$year==06|pops.info$year==17])
+pops.info$yr<-apply(pops.info["yr"], 1, function(x) {if(x==206) x=2006
+                                        if (x==207) x=2007
+                                        else x=x})
+pops.info$yr<-as.integer(pops.info$yr)
+pops<-unique(pops.info$Population.Year)
+
+pwss<-c("PWS91","PWS96","PWS07","PWS17")
+tbs<-c("TB91","TB96","TB06","TB17")
+sss<-c("SS96","SS06","SS17")
+y17<-pops[grep("17",pops)]
+comb1<-combn(pwss, 2)
+comb1<-t(comb1)
+comb2<-combn(tbs, 2)
+comb2<-t(comb2)
+comb3<-combn(sss, 2)
+comb3<-t(comb3)
+comb4<-combn(y17, 2)
+comb4<-t(comb4)
+
+#https://stackoverflow.com/questions/49689069/heatmap-with-continuous-rainbow-colours
+cols <- rev(rainbow(7)[-7]) #rainbow colors for heatmap
+
+#PWS
+Plots<-list()
+sfs.pws<-data.frame()
+for (i in 1: nrow(comb1)){
+    pop1<-comb1[i,1]
+    pop2<-comb1[i,2]
+    n1<-nrow(pops.info[pops.info$Population.Year==pop1,])
+    n2<-nrow(pops.info[pops.info$Population.Year==pop2,])
+    
+    sfs1<-vec2mat(paste0("../Data/new_vcf/angsd/fromVCF/2D/folded_",pop1,"_",pop2,"_maf00.sfs"), n1=n1, n2=n2, pop1=pop1, pop2=pop2)
+    
+    if (pops.info$yr[pops.info$Population.Year==pop1][1]>pops.info$yr[pops.info$Population.Year==pop2][1]){
+        sfs1<-data.frame(t(sfs1[,1:(ncol(sfs1)-1)]))
+        colnames(sfs1)<-0:(ncol(sfs1)-1)
+        sfs1$count<-0:(nrow(sfs1)-1)
+        p2<-pop2
+        pop2<-pop1
+        pop1<-p2
+    }
+    #Plot first 30
+    sfs2<-sfs1[1:30,1:30]
+    sfs2$count<-0:(nrow(sfs2)-1)
+    sfsm2<-melt(sfs2, id.vars="count")
+    sfsm2$variable<-as.integer(as.character(sfsm2$variable))
+    
+    #zero as white (replace with NA)
+    sfsm2$value[sfsm2$value==0]<-NA
+    sfsm2$pop1<-pop1
+    sfsm2$pop2<-pop2
+    sfs.pws<-rbind(sfs.pws, sfsm2)
+}
+
+sfs.pws$pop1<-factor(sfs.pws$pop1, levels=c("PWS91","PWS96","PWS07","PWS17"))
+sfs.pws$pop2<-factor(sfs.pws$pop2, levels=c("PWS91","PWS96","PWS07","PWS17"))
+
+ggplot(sfs.pws, aes(x=count, y=variable))+
+    facet_grid(pop2~pop1)+
+    geom_raster(aes(fill=log10(value)))+xlab('')+ylab("")+
+    scale_fill_gradientn(colors=cols, name="log(# of alleles)", na.value = "white")+
+    theme_minimal()
+ggsave("../Output/SFS/sfs_2D_PWS.png", width = 10, height = 8, dpi=300)
+   
+
+#TB
+sfs.tb<-data.frame()
+for (i in 1: nrow(comb2)){
+    pop1<-comb2[i,1]
+    pop2<-comb2[i,2]
+    n1<-nrow(pops.info[pops.info$Population.Year==pop1,])
+    n2<-nrow(pops.info[pops.info$Population.Year==pop2,])
+    
+    sfs1<-vec2mat(paste0("../Data/new_vcf/angsd/fromVCF/2D/folded_",pop1,"_",pop2,"_maf00.sfs"), n1=n1, n2=n2, pop1=pop1, pop2=pop2)
+    
+    if (pops.info$yr[pops.info$Population.Year==pop1][1]>pops.info$yr[pops.info$Population.Year==pop2][1]){
+        sfs1<-data.frame(t(sfs1[,1:(ncol(sfs1)-1)]))
+        colnames(sfs1)<-0:(ncol(sfs1)-1)
+        sfs1$count<-0:(nrow(sfs1)-1)
+        p2<-pop2
+        pop2<-pop1
+        pop1<-p2
+    }
+    #Plot first 30
+    sfs2<-sfs1[1:30,1:30]
+    sfs2$count<-0:(nrow(sfs2)-1)
+    sfsm2<-melt(sfs2, id.vars="count")
+    sfsm2$variable<-as.integer(as.character(sfsm2$variable))
+    
+    #zero as white (replace with NA)
+    sfsm2$value[sfsm2$value==0]<-NA
+    sfsm2$pop1<-pop1
+    sfsm2$pop2<-pop2
+    sfs.tb<-rbind(sfs.tb, sfsm2)
+}
+
+sfs.tb$pop1<-factor(sfs.tb$pop1, levels=c("TB91","TB96","TB06","TB17"))
+sfs.tb$pop2<-factor(sfs.tb$pop2, levels=c("TB91","TB96","TB06","TB17"))
+
+ggplot(sfs.tb, aes(x=count, y=variable))+
+    facet_grid(pop2~pop1)+
+    geom_raster(aes(fill=log10(value)))+xlab('')+ylab("")+
+    scale_fill_gradientn(colors=cols, name="log(# of alleles)", na.value = "white")+
+    theme_minimal()
+ggsave("../Output/SFS/sfs_2D_TB.png", width = 10, height = 8, dpi=300)
+
+#SS
+sfs.ss<-data.frame()
+for (i in 1: nrow(comb3)){
+    pop1<-comb3[i,1]
+    pop2<-comb3[i,2]
+    n1<-nrow(pops.info[pops.info$Population.Year==pop1,])
+    n2<-nrow(pops.info[pops.info$Population.Year==pop2,])
+    sfs1<-vec2mat(paste0("../Data/new_vcf/angsd/fromVCF/2D/folded_",pop1,"_",pop2,"_maf00.sfs"), n1=n1, n2=n2, pop1=pop1, pop2=pop2)
+    if (pops.info$yr[pops.info$Population.Year==pop1][1]>pops.info$yr[pops.info$Population.Year==pop2][1]){
+        sfs1<-data.frame(t(sfs1[,1:(ncol(sfs1)-1)]))
+        colnames(sfs1)<-0:(ncol(sfs1)-1)
+        sfs1$count<-0:(nrow(sfs1)-1)
+        p2<-pop2
+        pop2<-pop1
+        pop1<-p2
+    }
+    #Plot first 30
+    sfs2<-sfs1[1:30,1:30]
+    sfs2$count<-0:(nrow(sfs2)-1)
+    sfsm2<-melt(sfs2, id.vars="count")
+    sfsm2$variable<-as.integer(as.character(sfsm2$variable))
+    
+    #zero as white (replace with NA)
+    sfsm2$value[sfsm2$value==0]<-NA
+    sfsm2$pop1<-pop1
+    sfsm2$pop2<-pop2
+    sfs.ss<-rbind(sfs.ss, sfsm2)
+}
+sfs.ss$pop1<-factor(sfs.ss$pop1, levels=c("SS96","SS06","SS17"))
+sfs.ss$pop2<-factor(sfs.ss$pop2, levels=c("SS96","SS06","SS17"))
+
+ggplot(sfs.ss, aes(x=count, y=variable))+
+    facet_grid(pop2~pop1)+
+    geom_raster(aes(fill=log(value)))+xlab('')+ylab("")+
+    scale_fill_gradientn(colors=cols, name="log(# of alleles)", na.value = "white")+
+    theme_minimal()
+ggsave("../Output/SFS/sfs_2D_SS.png", width = 10, height = 8, dpi=300)
+
+#2017 pops
+sfs17<-data.frame()
+for (i in 1: nrow(comb4)){
+    pop1<-comb4[i,1]
+    pop2<-comb4[i,2]
+    n1<-nrow(pops.info[pops.info$Population.Year==pop1,])
+    n2<-nrow(pops.info[pops.info$Population.Year==pop2,])
+    sfs1<-vec2mat(paste0("../Data/new_vcf/angsd/fromVCF/2D/folded_",pop1,"_",pop2,"_maf00.sfs"), n1=n1, n2=n2, pop1=pop1, pop2=pop2)
+    
+    #Plot first 30
+    sfs2<-sfs1[1:30,1:30]
+    sfs2$count<-0:(nrow(sfs2)-1)
+    sfsm2<-melt(sfs2, id.vars="count")
+    sfsm2$variable<-as.integer(as.character(sfsm2$variable))
+    
+    #zero as white (replace with NA)
+    sfsm2$value[sfsm2$value==0]<-NA
+    sfsm2$pop1<-pop1
+    sfsm2$pop2<-pop2
+    sfs17<-rbind(sfs17, sfsm2)
+}
+
+sfs17$pop1<-factor(sfs17$pop1, levels=paste(y17))
+sfs17$pop2<-factor(sfs17$pop2, levels=paste(y17))
+
+ggplot(sfs17, aes(x=count, y=variable))+
+    facet_grid(pop2~pop1)+
+    geom_raster(aes(fill=log(value)))+xlab('')+ylab("")+
+    scale_fill_gradientn(colors=cols, name="log(# of alleles)", na.value = "white")+
+    theme_minimal()
+ggsave("../Output/SFS/sfs_2D_2017.png", width = 20, height = 16, dpi=300)
+```
+
+### 1D SFS all populations (Downsampled bam files)  
+![](../Output/SFS/1DSFS_all_downsampled.png)  
+
+### 2D SFS PWS  
+![](../Output/SFS/sfs_2D_PWS.png){width=50%}
+
+### 2D SFS TB    
+![](../Output/SFS/sfs_2D_TB.png){width=50%}
+
+### 2D SFS SS   
+![](../Output/SFS/sfs_2D_SS.png){width=50%}  
+
+### 2D SFS (2017)     
+![](../Output/SFS/sfs_2D_2017.png){width=70%}  
+
+
+# Fst between years per population 
+
+## PWS  
+
+### Fst along the genome
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+### Fst estimates from 2Dsfs
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(pops,2))
+
+fst<-data.frame()
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_",pop1,"_",pop2,"_50kWindow_maf00"))
+    conames<-colnames(df)[2:4]
+    colnames(df)[4]<-"Fst"
+    colnames(df)[1:3]<-conames
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    df$loc<-1:nrow(df)
+    fst<-rbind(fst, df)
+}
+
+evens<-paste0("chr",seq(2,26, by=2))
+#Plot Fst valuese across Genome
+fst$color<-"col1"
+fst$color[fst$chr %in% evens]<-"col2"
+fst$pop<-factor(fst$pop, levels=unique(fst$pop))
+
+#add chromosome number
+df<-fst[fst$pop=="PWS91.vs.PWS96",]
+rows<-data.frame(chr=1:26)
+for (i in 1:26){
+    if (i ==1){
+        rows$n[i]<-nrow(df[df$ch==i,])
+        rows$middle[i]<--nrow(df[df$ch==i,])/2
+    }
+    if (i >1){
+        rows$n[i]<-nrow(df[df$ch==i,])
+        rows$middle[i]<-sum(rows$n[1:(i-1)])+rows$n[i]/2
+    }
+}
+#
+ggplot(fst, aes(x=loc, y=Fst, color=color))+
+    facet_wrap(~pop, ncol = 1, strip.position="right")+
+    geom_point(size=0.2)+
+    scale_color_manual(values=c("gray50","steelblue"))+
+    theme_bw()+
+    ylab("Fst")+xlab('Genome position')+
+    theme(legend.position = "none", panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank())+
+    scale_x_continuous(breaks=rows$middle, labels=1:26)
+ggsave("../Output/SFS/PWS_Fst_pairwise_comparison.png", width = 20, height = 10, dpi=150)
+```
+![Pairwise Fst along the genome](../Output/SFS/PWS_Fst_pairwise_comparison.png)  
+### Pairwise Fst along each chromosome
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+## Plot Fst values along each chromosome
+fst$chr<-factor(fst$chr, levels=paste0("chr",1:26))
+fstpw<-fst
+plots<-list()
+compare<-paste0(unique(fstpw$pop))
+max(fstpw$Fst)
+for (i in 1:6){ 
+    fs<-gsub("vs.","",compare[i])
+    pops <- unlist(strsplit(fs, "\\."))
+    maxy<-max(fstpw$Fst[fstpw$pop==compare[i]])
+    # Fst with actual line to highlight the differences
+    plots[[i]] <- ggplot(fstpw[fstpw$pop==compare[i],], aes(x =midPos, y =Fst )) + 
+        geom_point(size = 1, color = gry,alpha = 0.4, shape = 1)+
+        theme_minimal()+ylim(0,maxy+0.02)+
+        theme(axis.text.x=element_blank())+
+        ylab("Fst\n")+ xlab("")+ 
+        ggtitle(paste0(pops[1]," vs.", pops[2]))+
+        geom_line(color=blu, size=0.2)+
+        facet_wrap(~chr, ncol = 9)
+}
+#save the plots together
+{png(paste0("../Output/SFS/PWS_Fst_maf00_chr.png"), height = 8, width = 18, res=150, units = "in")
+grid.arrange(plots[[3]], plots[[2]], plots[[4]], plots[[1]],plots[[5]],plots[[6]], ncol=3)
+dev.off()}
+```
+![Pairwise Fst for each genome](../Output/SFS/PWS_Fst_maf00_chr.png)  
+  
+
+### Create pairwise Fst matrix
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+## ..continued from above 
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(pops,2))
+
+## Plot average fst in a heatmap
+comp<-unique(fst$pop)
+pairfst<-data.frame(matrix(ncol=4, nrow=4), row.names=pops)
+colnames(pairfst)<-pops
+for (i in 1:6){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-fst[fst$pop==comp[i],]
+    pairfst[pop1,pop2]<-mean(df$Fst, na.rm=T)
+    #pairfst[pop2,pop1]<-mean(df$Fst, na.rm=T)
+}
+write.csv(pairfst,"../Output/SFS/PWS_pairwiseFst_matrix.csv")
+
+pairfst<-read.csv("../Output/SFS/PWS_pairwiseFst_matrix.csv", row.names = 1)
+df<-pairfst
+diag(df)<-0
+df$pop<-rownames(df)
+dfm<-melt(df,na.rm=T, id.vars='pop')
+
+#NA to diagonal
+dfm$value[dfm$value==0]<-NA
+dfm$pop<-factor(dfm$pop, levels=pops)
+dfm$value<-round(dfm$value, 4)
+ggplot(data = dfm, aes(pop, variable, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradientn(colors=c("white", "#0C54FF"), limits=c(0, (max(dfm$value, na.rm=T)+0.005)),na.value="gray80", 
+                         name="Fst")+
+    theme_minimal()+ xlab("")+ylab("")+
+    theme(axis.text.x = element_text(angle = 0, vjust = 0, 
+                                     size = 12, hjust = 0.5))+
+    theme(axis.text.y = element_text(size = 12))+
+    coord_fixed()+
+    geom_text(aes(pop, variable, label = value), color = "black", size = 5)
+ggsave(paste0("../Output/SFS/pairwiseFst_PWS.png"), width = 5, height = 5, dpi=150)
+```
+![PWS Pairwise Fst](../Output/SFS/pairwiseFst_PWS.png){width=50%}
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Plot Fst in a bar plot ordered and colored in the same way as Fst/Pi shuffle results (Shuffling_pi.fst.tehat.Rmd)
+fsts<-dfm[!is.na(dfm$value),]
+fsts$comp<-paste0(fsts$pop,"_",fsts$variable)
+
+#set the colors
+div1<-diverging_hcl(6, palette="Blue-Red")
+div2<-rev(div1)
+names(div2)<-c("PWS96_PWS07","PWS07_PWS17","PWS91_PWS96", "PWS91_PWS07", "PWS91_PWS17","PWS96_PWS17")
+fsts<-fsts[order(fsts$value, decreasing = T),]
+fsts$comp<-factor(fsts$comp, levels=paste0(unique(fsts$comp)))
+
+ggplot(fsts, aes(x=comp, y=value, fill=comp))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(name = "comp",values = div2)+
+    xlab('')+ylab('Fst')+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())
+ggsave("../Output/Fst/PairwiseFst_ordered.png", width = 4, height = 2.8, dpi=300 )
+
+#Fst over time
+
+fsts2<-fsts[fsts$comp %in% c("PWS91_PWS96","PWS96_PWS07","PWS07_PWS17"),]
+fsts2$time<-1
+fsts2$time[fsts2$comp=="PWS96_PWS07"]<-2
+fsts2$time[fsts2$comp=="PWS07_PWS17"]<-3
+
+ggplot(fsts2, aes(x=time, y=value))+
+    geom_point(size=3, color="steelblue")+
+    geom_path(color="steelblue")+
+    theme_classic()+ylab("Fst")+xlab("")+
+    scale_x_continuous(breaks=c(1,2,3), labels=c("91-96", "96-07","07-17"))
+ggsave("../Output/Fst/Fst_overTime.png", width = 4, height = 2.8, dpi=300 )
+
+fsts$series<-"1991-2007, 1991-2017"
+fsts$series[fsts$comp %in% c("PWS91_PWS96","PWS96_PWS07","PWS07_PWS17")]<-"1991-1996, 1996-2007, 2007-2017"
+fsts$series[fsts$comp =="PWS96_PWS17"]<-"1996-2017"
+fsts$time<-1
+fsts$time[fsts$variable=="PWS17"]<-3
+fsts$time[fsts$variable=="PWS07"]<-2
+source("../Rscripts/BaseScripts.R")
+
+ggplot(fsts, aes(x=time, y=value, color=series))+
+    geom_point(size=3)+
+    geom_path()+
+    scale_color_manual(values=cols)+
+    theme_classic()+ylab("Fst")+xlab("")+
+    scale_x_continuous(breaks=c(1,2,3), labels=c("1991-1996", "~2007","~2017"))+
+    theme(legend.title = element_blank())
+ggsave("../Output/Fst/Fst_overTime_allComparison.png", width = 6, height = 2.8, dpi=300 )
+
+
+fstP1<-fsts
+fstP2<-fsts2
+```
+
+![](../Output/Fst/Fst_overTime.png)  
+
+
+![](../Output/Fst/Fst_overTime_allComparison.png)  
+
+
+### Plot mean Fst for each chromosome  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Plot mean Fst of each chromosme
+Fst<-data.frame()
+compare<-paste0(unique(fstpw$pop))
+for (j in 1:26){
+    fst.ch<-fst[fst$ch==j,]
+    pairch<-data.frame(matrix(ncol=4, nrow=4), row.names=pops)
+    colnames(pairch)<-pops
+    for (i in 1:6){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        df<-fst.ch[fst.ch$pop==compare[i],]
+        pairch[pop1,pop2]<-mean(df$Fst, na.rm=T)
+    }
+    diag(pairch)<-0
+    pairch$pop<-rownames(pairch)
+    dfm<-melt(pairch,na.rm=T, id.vars='pop')
+    
+    #NA to diagonal
+    dfm$value[dfm$value==0]<-NA
+    dfm$pop<-factor(dfm$pop, levels=pops)
+    dfm$value<-round(dfm$value, 4)
+    dfm$chr<-j
+    Fst<-rbind(Fst, dfm)
+    
+}
+Fst$id<-paste0(Fst$pop," vs.",Fst$variable)
+Fst<-Fst[!is.na(Fst$value),]
+ggplot(Fst, aes(x=chr, y=value,color=id))+
+    geom_point()+
+    geom_path(stat="identity")+
+    theme_minimal()+ylab("Fst")+
+    scale_x_continuous(breaks=1:26, labels = 1:26)+
+    theme(legend.title = element_blank(), panel.grid.minor.x = element_blank())
+ggsave("../Output/SFS/PWS_Fst_byChromosome_dotplot.png", width = 8, height=4.5, dpi=150)
+```
+![PWS average Fst per chromosome](../Output/SFS/PWS_Fst_byChromosome_dotplot.png){width=80%}  
+
+<br>
+
+## Togiak Bay
+### Pairwise Fst along the genome  
+
+```{r message=FALSE, warning=FALSE}
+pops<-c("TB91","TB96","TB06","TB17")
+comb<-t(combn(pops,2))
+
+fst<-data.frame()
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_",pop1,"_",pop2,"_50kWindow_maf00"))
+    conames<-colnames(df)[2:4]
+    colnames(df)[4]<-"Fst"
+    colnames(df)[1:3]<-conames
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    df$loc<-1:nrow(df)
+    fst<-rbind(fst, df)
+}
+evens<-paste0("chr",seq(2,26, by=2))
+#Plot Fst values across Genome
+fst$color<-"col1"
+fst$color[fst$chr %in% evens]<-"col2"
+fst$pop<-factor(fst$pop, levels=unique(fst$pop))
+
+#add chromosome number
+df<-fst[fst$pop=="TB91.vs.TB96",]
+rows<-data.frame(chr=1:26)
+for (i in 1:26){
+    if (i ==1){
+        rows$n[i]<-nrow(df[df$ch==i,])
+        rows$middle[i]<--nrow(df[df$ch==i,])/2
+    }
+    if (i >1){
+        rows$n[i]<-nrow(df[df$ch==i,])
+        rows$middle[i]<-sum(rows$n[1:(i-1)])+rows$n[i]/2
+    }
+}
+#
+ggplot(fst, aes(x=loc, y=Fst, color=color))+
+    facet_wrap(~pop, ncol = 1, strip.position="right")+
+    geom_point(size=0.2)+
+    scale_color_manual(values=c("gray50","steelblue"))+
+    theme_bw()+
+    ylab("Fst")+xlab('Genome position')+
+    theme(legend.position = "none", panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank())+
+    scale_x_continuous(breaks=rows$middle, labels=1:26)
+ggsave("../Output/SFS/TB_Fst_pairwise_comparison.png", width =18 , height = 9, dpi=150)
+```
+![](../Output/SFS/TB_Fst_pairwise_comparison.png)  
+
+### Pairwise Fst along each chromosome
+```{r message=FALSE, warning=FALSE}
+## Plot Fst values along each chromosome
+fst$chr<-factor(fst$chr, levels=paste0("chr",1:26))
+fsttb<-fst
+plots<-list()
+compare<-paste0(unique(fsttb$pop))
+for (i in 1:6){ 
+    fs<-gsub("vs.","",compare[i])
+    pops <- unlist(strsplit(fs, "\\."))
+    maxy<-max(fsttb$Fst[fsttb$pop==compare[i]])
+    # Fst with actual line to highlight the differences
+    plots[[i]] <- ggplot(fsttb[fsttb$pop==compare[i],], aes(x =midPos, y =Fst )) + 
+        geom_point(size = 1, color = gry,alpha = 0.4, shape = 1)+
+        theme_minimal()+ylim(0,maxy+0.02)+
+        theme(axis.text.x=element_blank())+
+        ylab("Fst\n")+ xlab("")+ 
+        ggtitle(paste0(pops[1]," vs.", pops[2]))+
+        geom_line(color=blu, size=0.2)+
+        facet_wrap(~chr, ncol = 9)
+}
+```
+
+```{bash}
+#To save the plots, run in R
+png(paste0("Output/SFS/TB_Fst_maf00_chr.png"), height = 8, width = 18, res=150, units = "in")  
+grid.arrange(plots[[3]], plots[[2]], plots[[4]], plots[[1]],plots[[5]],plots[[6]], ncol=3)  
+dev.off()  
+```
+
+![](../Output/SFS/TB_Fst_maf00_chr.png)  
+
+
+### Pairwise Fst matrix
+```{r eval=FALSE, message=FALSE, warning=FALSE}  
+## Continued from the above
+pops<-c("TB91","TB96","TB06","TB17")
+comb<-t(combn(pops,2))
+
+## Plot average fst in a heatmap
+compare<-unique(fst$pop)
+pairfst<-data.frame(matrix(ncol=4, nrow=4), row.names=pops)
+colnames(pairfst)<-pops
+for (i in 1:6){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-fst[fst$pop==compare[i],]
+    pairfst[pop1,pop2]<-mean(df$Fst, na.rm=T)
+}
+write.csv(pairfst,"../Output/SFS/TB_pairwiseFst_matrix.csv")
+
+#pairfst<-read.csv("../Output/SFS/TB_pairwiseFst_matrix.csv", row.names = 1)
+
+df<-pairfst
+diag(df)<-0
+df$pop<-rownames(df)
+dfm<-melt(df,na.rm=T, id.vars='pop')
+#NA to diagonal
+dfm$value[dfm$value==0]<-NA
+dfm$pop<-factor(dfm$pop, levels=pops)
+dfm$value<-round(dfm$value, 4)
+ggplot(data = dfm, aes(pop, variable, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradientn(colors=c("white", "#0C54FF"), limits=c(0, (max(dfm$value, na.rm=T)+0.005)),na.value="gray80", 
+                         name="Fst")+
+    theme_minimal()+ xlab("")+ylab("")+
+    theme(axis.text.x = element_text(angle = 0, vjust = 0, 
+                                     size = 12, hjust = 0.5))+
+    theme(axis.text.y = element_text(size = 12))+
+    coord_fixed()+
+    geom_text(aes(pop, variable, label = value), color = "black", size = 5)
+ggsave(paste0("../Output/SFS/pairwiseFst_TB.png"), width = 5, height = 5, dpi=150)
+```
+![](../Output/SFS/pairwiseFst_TB.png){width=50%}  
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Plot Fst in a bar plot ordered and colored in the same way as Fst/Pi shuffle results (Shuffling_pi.fst.tehat.Rmd)
+fsts<-dfm[!is.na(dfm$value),]
+fsts$comp<-paste0(fsts$pop,"_",fsts$variable)
+
+#set the colors
+#div1<-diverging_hcl(6, palette="Blue-Red")
+#div2<-rev(div1)
+#names(div2)<-c("PWS96_PWS07","PWS07_PWS17","PWS91_PWS96", "PWS91_PWS07", "PWS91_PWS17","PWS96_PWS17")
+fsts<-fsts[order(fsts$value, decreasing = T),]
+fsts$comp<-factor(fsts$comp, levels=paste0(unique(fsts$comp)))
+
+ggplot(fsts, aes(x=comp, y=value, fill=comp))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values = div1)+
+    xlab('')+ylab('Fst')+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())
+ggsave("../Output/Fst/TB_PairwiseFst_ordered.png", width = 4, height = 2.8, dpi=300 )
+
+#Fst over time
+fsts2<-fsts[fsts$comp %in% c("TB91_TB96","TB96_TB06","TB06_TB17"),]
+fsts2$time<-1
+fsts2$time[fsts2$comp=="TB96_TB06"]<-2
+fsts2$time[fsts2$comp=="TB06_TB17"]<-3
+fsts2<-fsts2[order(fsts2$time),]
+ggplot(fsts2, aes(x=time, y=value))+
+    geom_point(size=3, color="steelblue")+
+    geom_path( aes(x=time, y=value),color="steelblue")+
+    theme_classic()+ylab("Fst")+xlab("")+
+    scale_x_continuous(breaks=c(1,2,3), labels=c("1991-1996", "1996-2006","2006-2017"))
+ggsave("../Output/Fst/Fst_overTime_TB.png", width = 4, height = 2.8, dpi=300 )
+
+fsts$series<-"1991-2007, 1991-2017"
+fsts$series[fsts$comp %in% c("TB91_TB96","TB96_TB06","TB06_TB17")]<-"1991-1996, 1996-2007, 2007-2017"
+fsts$series[fsts$comp =="TB96_TB17"]<-"1996-2017"
+fsts$time<-1
+fsts$time[fsts$variable=="TB17"]<-3
+fsts$time[fsts$variable=="TB06"]<-2
+#source("../Rscripts/BaseScripts.R")
+fsts<-fsts[order(fsts$time),]
+ggplot(fsts, aes(x=time, y=value, color=series))+
+    geom_point(size=3)+
+    geom_path()+
+    scale_color_manual(values=cols)+
+    theme_classic()+ylab("Fst")+xlab("")+
+    scale_x_continuous(breaks=c(1,2,3), labels=c("1991-1996", "~2007","~2017"))+
+    theme(legend.title = element_blank())
+ggsave("../Output/Fst/Fst_overTime_TB_allComparison.png", width = 6, height = 2.8, dpi=300 )
+
+# plot both PWS and TB together
+
+fstP2$pop<-"PWS"
+fsts2$pop<-"TB"
+fstPT<-rbind(fstP2, fsts2)
+
+ggplot(fstPT, aes(x=time, y=value, color=pop))+
+    geom_point(size=3)+
+    geom_path( aes(x=time, y=value))+
+    scale_color_manual(values=cols[c(2,1)])+
+    theme_classic()+ylab("Fst")+xlab("")+
+    scale_x_continuous(breaks=c(1,2,3), labels=c("1991-1996", "1996-2006","2006-2017"))+
+    theme(legend.title = element_blank())
+ggsave("../Output/Fst/Fst_overTime_PWS_TB.png", width = 4, height = 2.8, dpi=300 )
+
+```
+
+![](../Output/Fst/Fst_overTime_TB.png){width=50%]}
+
+
+
+![](../Output/Fst/Fst_overTime_TB_allComparison.png){width=64%]
+
+
+### Mean pairsie Fst per chromosome 
+```{r message=FALSE, warning=FALSE}  
+# Plot mean Fst of each chromosme
+Fst<-data.frame()
+for (j in 1:26){
+    fst.ch<-fst[fst$ch==j,]
+    pairch<-data.frame(matrix(ncol=4, nrow=4), row.names=pops)
+    colnames(pairch)<-pops
+    for (i in 1:6){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        df<-fst.ch[fst.ch$pop==compare[i],]
+        pairch[pop1,pop2]<-mean(df$Fst, na.rm=T)
+    }
+    diag(pairch)<-0
+    pairch$pop<-rownames(pairch)
+    dfm<-melt(pairch,na.rm=T, id.vars='pop')
+    
+    #NA to diagonal
+    dfm$value[dfm$value==0]<-NA
+    dfm$pop<-factor(dfm$pop, levels=pops)
+    dfm$value<-round(dfm$value, 4)
+    dfm$chr<-j
+    Fst<-rbind(Fst, dfm)
+    
+}
+Fst$id<-paste0(Fst$pop," vs.",Fst$variable)
+Fst<-Fst[!is.na(Fst$value),]
+ggplot(Fst, aes(x=chr, y=value,color=id))+
+    geom_point()+
+    geom_path(stat="identity")+
+    theme_minimal()+ylab("Fst")+
+    scale_x_continuous(breaks=1:26, labels = 1:26)+
+    theme(legend.title = element_blank(), panel.grid.minor.x = element_blank())
+ggsave("../Output/SFS/TB_Fst_byChromosome_dotplot.png", width = 13, height=6.5, dpi=150)
+```
+
+![TB mean Fst per chromosome](../Output/SFS/TB_Fst_byChromosome_dotplot.png)
+
+<br>
+
+## Sitka Sound  
+### Pairwise Fst along the genome 
+```{r message=FALSE, warning=FALSE}
+
+pops<-c("SS96","SS06","SS17")
+comb<-t(combn(pops,2))
+
+fst<-data.frame()
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_",pop1,"_",pop2,"_50kWindow_maf00"))
+    conames<-colnames(df)[2:4]
+    colnames(df)[4]<-"Fst"
+    colnames(df)[1:3]<-conames
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    df$loc<-1:nrow(df)
+    fst<-rbind(fst, df)
+}
+
+evens<-paste0("chr",seq(2,26, by=2))
+#Plot Fst values across Genome
+fst$color<-"col1"
+fst$color[fst$chr %in% evens]<-"col2"
+fst$pop<-factor(fst$pop, levels=unique(fst$pop))
+
+#add chromosome number
+df<-fst[fst$pop=="SS96.vs.SS06",]
+rows<-data.frame(chr=1:26)
+for (i in 1:26){
+    if (i ==1){
+        rows$n[i]<-nrow(df[df$ch==i,])
+        rows$middle[i]<--nrow(df[df$ch==i,])/2
+    }
+    if (i >1){
+        rows$n[i]<-nrow(df[df$ch==i,])
+        rows$middle[i]<-sum(rows$n[1:(i-1)])+rows$n[i]/2
+    }
+}
+#
+ggplot(fst, aes(x=loc, y=Fst, color=color))+
+    facet_wrap(~pop, ncol = 1, strip.position="right")+
+    geom_point(size=0.2)+
+    scale_color_manual(values=c("gray50","steelblue"))+
+    theme_bw()+
+    ylab("Fst")+xlab('Genome position')+
+    theme(legend.position = "none", panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank())+
+    scale_x_continuous(breaks=rows$middle, labels=1:26)
+ggsave("../Output/SFS/SS_Fst_pairwise_comparison.png", width = 16, height = 7, dpi=150)
+```
+![](../Output/SFS/SS_Fst_pairwise_comparison.png)  
+  
+   
+### Pairwise Fst along each chromosome
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+## Plot Fst values along each chromosome
+fst$chr<-factor(fst$chr, levels=paste0("chr",1:26))
+fstss<-fst
+plots<-list()
+compare<-paste0(unique(fstss$pop))
+for (i in 1:3){ 
+    fs<-gsub("vs.","",compare[i])
+    pops <- unlist(strsplit(fs, "\\."))
+    maxy<-max(fstss$Fst[fstss$pop==compare[i]])
+    # Fst with actual line to highlight the differences
+    plots[[i]] <- ggplot(fstss[fstss$pop==compare[i],], aes(x =midPos, y =Fst )) + 
+        geom_point(size = 1, color = gry,alpha = 0.4, shape = 1)+
+        theme_minimal()+ylim(0,maxy+0.02)+
+        theme(axis.text.x=element_blank())+
+        ylab("Fst\n")+ xlab("")+ 
+        ggtitle(paste0(pops[1]," vs.", pops[2]))+
+        geom_line(color=blu, size=0.2)+
+        facet_wrap(~chr, ncol = 9)
+}
+
+{png(paste0("Output/SFS/SS_Fst_maf00_chr.png"), height = 4, width = 18, res=150, units = "in")  
+grid.arrange(plots[[1]], plots[[2]], plots[[3]], ncol=3)  
+dev.off()  }
+```
+
+![](../Output/SFS/SS_Fst_maf00_chr.png)  
+  
+### Pairwise Fst matrix
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+## Continued from the above
+pops<-c("SS96","SS06","SS17")
+comb<-t(combn(pops,2))
+
+## Plot average fst in a heatmap
+compare<-unique(fst$pop)
+pairfst<-data.frame(matrix(ncol=3, nrow=3), row.names=pops)
+colnames(pairfst)<-pops
+for (i in 1:3){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-fst[fst$pop==compare[i],]
+    pairfst[pop1,pop2]<-mean(df$Fst, na.rm=T)
+}
+write.csv(pairfst,"../Output/SFS/SS_pairwiseFst_matrix.csv")
+
+pairfst<-read.csv("../Output/SFS/SS_pairwiseFst_matrix.csv", row.names = 1)
+df<-pairfst
+diag(df)<-0
+df$pop<-rownames(df)
+dfm<-melt(df,na.rm=T, id.vars='pop')
+#NA to diagonal
+dfm$value[dfm$value==0]<-NA
+dfm$pop<-factor(dfm$pop, levels=pops)
+dfm$value<-round(dfm$value, 4)
+ggplot(data = dfm, aes(pop, variable, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradientn(colors=c("white", "#0C54FF"), limits=c(0, (max(dfm$value, na.rm=T)+0.005)),na.value="gray80", 
+                         name="Fst")+
+    theme_minimal()+ xlab("")+ylab("")+
+    theme(axis.text.x = element_text(angle = 0, vjust = 0, 
+                                     size = 12, hjust = 0.5))+
+    theme(axis.text.y = element_text(size = 12))+
+    coord_fixed()+
+    geom_text(aes(pop, variable, label = value), color = "black", size = 5)
+ggsave(paste0("../Output/SFS/pairwiseFst_SS.png"), width = 5, height = 5, dpi=150)
+```
+![](../Output/SFS/pairwiseFst_SS.png){width=60%}  
+
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Plot Fst in a bar plot ordered and colored in the same way as Fst/Pi shuffle results (Shuffling_pi.fst.tehat.Rmd)
+fsts<-dfm[!is.na(dfm$value),]
+fsts$comp<-paste0(fsts$pop,"_",fsts$variable)
+
+#set the colors
+#div1<-diverging_hcl(6, palette="Blue-Red")
+#div2<-rev(div1)
+#names(div2)<-c("PWS96_PWS07","PWS07_PWS17","PWS91_PWS96", "PWS91_PWS07", "PWS91_PWS17","PWS96_PWS17")
+fsts<-fsts[order(fsts$value, decreasing = T),]
+fsts$comp<-factor(fsts$comp, levels=paste0(unique(fsts$comp)))
+
+ggplot(fsts, aes(x=comp, y=value, fill=comp))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values = div1)+
+    xlab('')+ylab('Fst')+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())
+ggsave("../Output/Fst/TB_PairwiseFst_ordered.png", width = 3.4, height = 2.8, dpi=300 )
+
+#Fst over time
+fsts2<-fsts[fsts$comp %in% c("SS96_SS06","SS06_SS17"),]
+fsts2$time<-1
+fsts2$time[fsts2$comp=="SS96_SS06"]<-2
+fsts2$time[fsts2$comp=="SS06_SS17"]<-3
+fsts2<-fsts2[order(fsts2$time),]
+ggplot(fsts2, aes(x=time, y=value))+
+    geom_point(size=3, color="steelblue")+
+    geom_path( aes(x=time, y=value),color="steelblue")+
+    theme_classic()+ylab("Fst")+xlab("")+
+    scale_x_continuous(breaks=c(1,2,3), labels=c("1991-1996", "1996-2006","2006-2017"))
+ggsave("../Output/Fst/Fst_overTime_SS.png", width = 3.5, height = 2.8, dpi=300 )
+
+fsts$series<-"1991-2007, 1991-2017"
+fsts$series[fsts$comp =="SS96_SS17"]<-"1996-2017"
+fsts$time<-1
+fsts$time[fsts$variable=="SS17"]<-3
+fsts$time[fsts$variable=="SS06"]<-2
+#source("../Rscripts/BaseScripts.R")
+fsts<-fsts[order(fsts$time),]
+ggplot(fsts, aes(x=time, y=value, color=series))+
+    geom_point(size=3)+
+    geom_path()+
+    scale_color_manual(values=cols)+
+    theme_classic()+ylab("Fst")+xlab("")+
+    scale_x_continuous(breaks=c(1,2,3), labels=c("1991-1996", "~2007","~2017"))+
+    theme(legend.title = element_blank())
+ggsave("../Output/Fst/Fst_overTime_SS_allComparison.png", width = 6, height = 2.8, dpi=300 )
+
+
+# plot all 3 pops together
+
+fsts2$pop<-"SS"
+
+fstPST<-rbind(fstPT, fsts2)
+
+ggplot(fstPST, aes(x=time, y=value, color=pop))+
+    geom_point(size=3)+
+    geom_path( aes(x=time, y=value))+
+    scale_color_manual(values=cols[c(2,1,3)])+
+    theme_classic()+ylab("Fst")+xlab("")+
+    scale_x_continuous(breaks=c(1,2,3), labels=c("1991-1996", "1996-2006","2006-2017"))+
+    theme(legend.title = element_blank())
+ggsave("../Output/Fst/Fst_overTime_3Pops.png", width = 5, height = 2.8, dpi=300 )
+
+```
+![](../Output/Fst/Fst_overTime_3Pops.png){width=60%}
+
+
+### Mean pairsie Fst per chromosome  
+```{r message=FALSE, warning=FALSE, eval=FALSE}  
+# Plot mean Fst of each chromosomes
+Fst<-data.frame()
+for (j in 1:26){
+    fst.ch<-fst[fst$ch==j,]
+    pairch<-data.frame(matrix(ncol=3, nrow=3), row.names=pops)
+    colnames(pairch)<-pops
+    for (i in 1:3){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        df<-fst.ch[fst.ch$pop==compare[i],]
+        pairch[pop1,pop2]<-mean(df$Fst, na.rm=T)
+    }
+    diag(pairch)<-0
+    pairch$pop<-rownames(pairch)
+    dfm<-melt(pairch,na.rm=T, id.vars='pop')
+    
+    #NA to diagonal
+    dfm$value[dfm$value==0]<-NA
+    dfm$pop<-factor(dfm$pop, levels=pops)
+    dfm$value<-round(dfm$value, 4)
+    dfm$chr<-j
+    Fst<-rbind(Fst, dfm)
+    
+}
+Fst$id<-paste0(Fst$pop," vs.",Fst$variable)
+Fst<-Fst[!is.na(Fst$value),]
+ggplot(Fst, aes(x=chr, y=value,color=id))+
+    geom_point()+
+    geom_path(stat="identity")+
+    theme_minimal()+ylab("Fst")+
+    scale_x_continuous(breaks=1:26, labels = 1:26)+
+    theme(legend.title = element_blank(), panel.grid.minor.x = element_blank())
+ggsave("../Output/SFS/SS_Fst_byChromosome_dotplot.png", width = 8, height=4.5, dpi=150)
+```
+![](../Output/SFS/SS_Fst_byChromosome_dotplot.png)
+
+
+
+
+## 2017 Populations
+
+### Pairiwse Fst along the genome  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+popsn<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-unique(popsn$Population.Year)
+y17<-pops[grep("17",pops)]
+
+comb<-combn(y17, 2)
+comb<-t(comb)
+
+#Year2017
+fst17<-data.frame()
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_folded_",pop1,"_",pop2,"_50kWindow_maf00"))
+    conames<-colnames(df)[2:4]
+    colnames(df)[4]<-"Fst"
+    colnames(df)[1:3]<-conames
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    df$loc<-1:nrow(df)
+    fst17<-rbind(fst17, df)
+}
+
+write.csv(fst17,"../Output/SFS/Fst_window_year2017_allpops.csv")
+
+fst17$ch<-as.integer(gsub("chr","",fst17$chr))
+fst17<-fst17[order(fst17$ch, fst17$midPos),]
+fst17$chr<-factor(fst17$chr, levels=paste0("chr",1:26))
+
+pairs<-unique(fst17$pop)
+plots<-list()
+for (i in 1:length(pairs)){ 
+    fs<-gsub(".vs","",pairs[i])
+    pops <- unlist(strsplit(fs, "\\."))
+    # Fst with actual line to highlight the differences
+    df<-fst17[fst17$pop==pairs[i],]
+    plots[[i]] <- ggplot(df, aes(x =midPos, y = Fst)) + 
+        geom_point(size = 1, color = "gray",alpha = 0.4, shape = 1)+
+        theme_minimal()+
+        theme(axis.text.x=element_blank())+
+        ylab("Fst\n")+ xlab("")+ 
+        ggtitle(paste0(pops[1]," vs.", pops[2]))+
+        geom_line(color="steelblue", size=0.2)+
+        facet_wrap(~chr, ncol = 9)
+}
+
+#Same y-axis
+plots2<-list()
+#TB ylim=0.8
+#nonTB 0.6
+for (i in 1:length(pairs)){ 
+    fs<-gsub(".vs","",pairs[i])
+    pops <- unlist(strsplit(fs, "\\."))
+    # Fst with actual line to highlight the differences
+    df<-fst17[fst17$pop==pairs[i],]
+    if (i %in% c(4,8,11,13,15)) ymax=0.8
+    else ymax=0.6
+    plots2[[i]] <- ggplot(df, aes(x =midPos, y = Fst)) + 
+        geom_point(size = 1, color = "gray",alpha = 0.4, shape = 1)+
+        theme_minimal()+ylim(0,ymax)+
+        theme(axis.text.x=element_blank())+
+        ylab("Fst\n")+ xlab("")+ 
+        ggtitle(paste0(pops[1]," vs.", pops[2]))+
+        geom_line(color="steelblue", size=0.2)+
+        facet_wrap(~chr, ncol = 9)
+}
+
+```
+
+
+```{R}
+{png(paste0("../Output/SFS/Year2017_Fst1.png"), height = 8, width = 20, res=150, units = "in")
+do.call(grid.arrange, c(plots[1:6], ncol=3))
+dev.off()}
+
+{png(paste0("../Output/SFS/Year2017_Fst2.png"), height = 12, width = 20, res=150, units = "in")
+do.call(grid.arrange, c(plots[7:15], ncol=3))
+dev.off()}
+
+#plot non-TB
+{png(paste0("../Output/SFS/Year2017_Fst_sameYaxis.png"), height = 16, width = 20, res=150, units = "in")
+do.call(grid.arrange, c(plots2[c(1,2,3,5,6,7,9,10,12,14)], ncol=3))
+dev.off()}
+
+{png(paste0("../Output/SFS/Year2017_Fst_sameYaxis2_TB.png"), height = 12, width = 20, res=150, units = "in")
+do.call(grid.arrange, c(plots2[c(4,8,11,13,15)], ncol=3))
+dev.off()}
+```
+
+![contrast without TB](../Output/SFS/Year2017_Fst_sameYaxis.png)
+
+![Contrast against TB pop](../Output/SFS/Year2017_Fst_sameYaxis2_TB.png)
+
+
+### Paiwise Fst matrix
+
+```{r echo=TRUE,message=FALSE, warning=FALSE}
+#Plot pairwise Fst values
+bcxca <- round(mean(fst17$Fst[fst17$pop=="BC17.vs.CA17"]),4)
+bcxpw <- round(mean(fst17$Fst[fst17$pop=="BC17.vs.PWS17"]),4)
+caxpw <- round(mean(fst17$Fst[fst17$pop=="CA17.vs.PWS17"]),4)
+bcxwa <- round(mean(fst17$Fst[fst17$pop=="BC17.vs.WA17"]),4)
+caxwa <- round(mean(fst17$Fst[fst17$pop=="CA17.vs.WA17"]),4)
+bcxss <- round(mean(fst17$Fst[fst17$pop=="BC17.vs.SS17"]),4)
+bcxtb <- round(mean(fst17$Fst[fst17$pop=="BC17.vs.TB17"]),4)
+ssxtb <- round(mean(fst17$Fst[fst17$pop=="SS17.vs.TB17"]),4)
+caxss <- round(mean(fst17$Fst[fst17$pop=="CA17.vs.SS17"]),4)
+pwxss <- round(mean(fst17$Fst[fst17$pop=="PWS17.vs.SS17"]),4)
+caxtb <- round(mean(fst17$Fst[fst17$pop=="CA17.vs.TB17"]),4)
+pwxtb <- round(mean(fst17$Fst[fst17$pop=="PWS17.vs.TB17"]),4)
+pwxwa <- round(mean(fst17$Fst[fst17$pop=="PWS17.vs.WA17"]),4)
+ssxwa <- round(mean(fst17$Fst[fst17$pop=="SS17.vs.WA17"]),4)
+tbxwa <- round(mean(fst17$Fst[fst17$pop=="TB17.vs.WA17"]),4)
+
+fst_vec <- c(0,pwxtb,ssxtb,bcxtb,tbxwa,caxtb,
+             pwxtb,0,pwxss,bcxpw,pwxwa,caxpw,
+             ssxtb,pwxss,0,bcxss,ssxwa,caxss,
+             bcxtb,bcxpw,bcxss,0,bcxwa,bcxca,
+             tbxwa,pwxwa,ssxwa,bcxwa,0,caxwa,
+             caxtb,caxpw,caxss,bcxca,caxwa,0)
+
+fst_mat = matrix(fst_vec, nrow = 6, ncol = 6)
+colnames(fst_mat) <- c("TB17","PWS17","SS17","BC17","WA17","CA17")
+rownames(fst_mat) <- c("TB17","PWS17","SS17","BC17","WA17","CA17")
+
+fst_mat[lower.tri(fst_mat, diag = F)]<-NA
+write.csv(fst_mat, "../Output/SFS/Fst_matrix_2017_all.csv")
+
+# Melt the correlation matrix
+melted_cormat <- melt(fst_mat, na.rm = TRUE)
+melted_cormat[melted_cormat==0]<-NA
+# Heatmap
+melted_cormat$color<-"a"
+melted_cormat$color[melted_cormat$value>=0.1]<-"b"
+
+ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradientn(colors=c("white", "blue"), limits=c(0, (max(melted_cormat$value, na.rm=T)+0.005)),na.value="gray80", 
+                         name="Fst")+
+    theme_minimal()+ xlab("")+ylab("")+
+    theme(axis.text.x = element_text(angle = 0, vjust = 0, 
+                                     size = 12, hjust = 0.5))+
+    theme(axis.text.y = element_text(size = 12))+
+    coord_fixed()+
+    geom_text(aes(Var2, Var1, label = value, color=color),  size = 5)+
+    scale_color_manual(values=c("black", "white"), guide='none')
+ggsave("../Output/SFS/Fst_matrix_2017_all.png", height = 6, width = 6, dpi=150)
+```
+![](../Output/SFS/Fst_matrix_2017_all.png){width=75%}
+
+## Fst change over time between PWS/SS/TB
+
+```{r echo=TRUE,message=FALSE, warning=FALSE, eval=FALSE}
+
+comb<-data.frame(a=c("PWS91","PWS96","PWS07","PWS17","PWS96","PWS07","PWS17","SS96","SS06","SS17"),b=c("TB91","TB96","TB06","TB17","SS96","SS06","SS17","TB96","TB06","TB17")) 
+
+fsts<-data.frame()
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_folded_",pop1,"_",pop2,"_50kWindow_maf00"))
+    conames<-colnames(df)[2:4]
+    colnames(df)[4]<-"Fst"
+    colnames(df)[1:3]<-conames
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    df$loc<-1:nrow(df)
+    fsts<-rbind(fsts, df)
+}
+write.csv(fsts,"../Output/SFS/Fst_betweenPop.csv")
+
+re<-aggregate(fsts$Fst, by=list(fsts$pop), mean, na.rm=T)
+compa<-strsplit(re$Group.1, split=".vs.")
+re$pop1<-lapply(compa, "[[", 1)
+re$pop2<-lapply(compa, "[[", 2)
+re$year <- as.numeric(str_extract(re$pop1, "[0-9]+"))
+re$year[re$year==7|re$year==6]<-2006
+re$year[re$year==91]<-1991
+re$year[re$year==96]<-1996
+re$year[re$year==17]<-2017
+re$pop1<-str_extract(re$pop1, "[aA-zZ]+")
+re$pop2<-str_extract(re$pop2, "[aA-zZ]+")
+re$pops<-paste0(re$pop1,"-",re$pop2)
+
+ggplot(re, aes(x=year, y=x, color=pops, group=pops))+
+    geom_point(position=position_dodge(width = 1), size=3)+
+    geom_line(position=position_dodge(width = 1))+
+    ylab("Fst")+xlab("Year")+
+    theme_classic()+theme(legend.title = element_blank())+
+    scale_color_manual(values=cols[c(1,5,4)])
+ggsave("../Output/SFS/Fst_shift_overYears_3pops.png", width = 5, height = 3, dpi=300)
+
+```
+
+![](../Output/SFS/Fst_shift_overYears_3pops.png){width=50%}
+
+
+
+<br>
+<br>
+  
+# Use Pixy to calculate pi
+
+## Steps
+
+1. Create all sites (invariant) vcf files  
+(see invariantVCF_PWS91.sh)
+
+```{bash eval=FALSE, include=FALSE}
+#Using bcftools mpileup (-r is to specify chromosome)
+bcftools mpileup -f <reference.fa> -b <bamlist.txt> -r <X> | bcftools call -m -Oz -f GQ -o <output>
+
+#Create a sample id file (required)
+# Add population info to the sample sheet
+sed 's/$/\tPWS91/' PWS91.txt >pws91pop.txt
+
+#check the sample names in the vcf file
+bcftools query -l PWS91_ch1.vcf.gz
+# somehow, _ was replaced by .
+```
+
+2.  Reformat the sample file ('_' was replaced by '.' in the process of making vcf files)   
+
+```{r echo=TRUE}
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+for (i in 1: length(pops)){
+    df<-read.table(paste0("../Data/pixy/",pops[i],".txt"))
+    df$V1<-gsub("_",".", df$V1)
+    df$V2<-pops[i]
+    write.table(df, paste0("../Data/pixy/",pops[i],"pop.txt"), quote = F, col.names=F, row.names = F, sep="\t")
+}
+
+pops<-c("TB91","TB96","TB06","TB17")
+for (i in 1: length(pops)){
+    df<-read.table(paste0("../Data/pixy/",pops[i],".txt"))
+    df$V1<-gsub("_",".", df$V1)
+    df$V2<-pops[i]
+    write.table(df, paste0("../Data/pixy/",pops[i],"/" ,pops[i],"pop.txt"), quote = F, col.names=F, row.names = F, sep="\t")
+}
+
+pops<-c("SS96","SS06","SS17")
+for (i in 1: length(pops)){
+    df<-read.table(paste0("../Data/popinfo/",pops[i],".txt"))
+    df$V1<-gsub("_",".", df$V1)
+    df$V2<-pops[i]
+    write.table(df, paste0("../Data/pixy/",pops[i],"/" ,pops[i],"pop.txt"), quote = F, col.names=F, row.names = F, sep="\t")
+}
+pops<-c("CA17","BC17","WA17")
+for (i in 1: length(pops)){
+    df<-read.table(paste0("../Data/popinfo/",pops[i],".txt"))
+    df$V1<-gsub("_",".", df$V1)
+    df$V2<-pops[i]
+    write.table(df, paste0("../Data/pixy/",pops[i],"/" ,pops[i],"pop.txt"), quote = F, col.names=F, row.names = F, sep="\t")
+}
+```
+
+3. Run Pixy (example: PWS91 Chr1)
+```{bash echo=TRUE}
+#index the vcf.gz file
+tabix PWS91_ch1.vcf.gz
+
+# Run Pixy 
+#first activate the conda env (py38) -runs on older Python (<=3.8)
+conda activate py38
+cd ~/Projects/PacHerring/Data/pixy
+pixy --stats pi --vcf PWS91_ch1.vcf.gz --populations pws91pop.txt --window_size 10000 --n_core 8 --output_prefix PWS91_ch1
+
+conda deactivate
+```
+
+4. Summarize the output from Pixy for PWS91 Chr1  
+
+```{r warning=FALSE, echo=TRUE}
+pipi<-read.table("../Data/pixy/PWS91/PWS91_ch1_pi.txt", header=T)
+ggplot(pipi, aes(x=window_pos_1, y=avg_pi))+
+    geom_line(color=blu)+xlab('')+ylab(expression("mean "*pi))
+ggsave("../Output/SFS/pixy_pi_pws91_ch1_line.png", width = 6, height = 3.5, dpi=300)
+```
+![](../Output/SFS/pixy_pi_pws91_ch1_line.png){width=75%}
+```{r warning=FALSE, echo=TRUE}
+ggplot(pipi, aes(x=window_pos_1, y=avg_pi))+
+    geom_point(size=0.3, color="gray20")
+
+mean(pipi$avg_pi)
+# 0.00278471
+
+#weighted mean
+pipi$pi_sum<-pipi$avg_pi*pipi$no_sites
+sum(pipi$pi_sum)/sum(pipi$no_sites)
+# 0.002775464
+```
+
+## Compare π estimated from ANGSD vs. Pixy
+
+```{r warning=FALSE, echo=TRUE}
+#Compare with the pi estimated from ANGSD SFS 
+theta<-read.delim(paste0('../Data/new_vcf/angsd/fromBam/unfolded/PWS91_50kwin_10kstep.pestPG'))
+theta$pi<-theta$tP/theta$nSites
+mean(theta$pi[theta$Chr=="chr1"])
+#0.003826297
+
+#chr1 comparison
+ch1<-pipi[,c("chromosome", "avg_pi")]
+ch1$method<-"Pixy"
+theta2<-theta[,c("Chr","pi")]
+theta2$method<-"ANGSD"
+colnames(ch1)[1:2]<-c("Chr","pi")
+ch1<-rbind(ch1,theta2)
+
+
+ggplot(ch1, aes(x=method, y=pi))+
+    geom_boxplot(aes(middle=mean(pi), color=method),outlier.alpha = 0.2)+
+    theme_classic()+xlab('')+ylab(expression(pi))+
+    scale_color_manual(values=c("#1f78b4","#fb9a99"), guide='none')
+ggsave("../Output/SFS/Pi_comparison_pixy.vs.angsd.pws91.ch1.png", width=4, height=4,dpi=200 )
+```
+![](../Output/SFS/Pi_comparison_pixy.vs.angsd.pws91.ch1.png){width=50%}
+
+### Run Pixy for all chromosomes for PWS 
+
+```{bash echo=TRUE}
+#index vcf files for all chromosomes
+for f in *.vcf.gz; do
+filename=$(basename $f)
+tabix $f 
+done
+```
+
+
+```{r echo+TRUE}
+#create a script to run pixy
+for (j in 1: length(pops)){
+    sink(paste0("../Data/pixy/runpixy_", pops[j],".sh"))
+    cat("#!/bin/bash\n\n")
+    for (i in 1:26){
+        cat(paste0("pixy --stats pi --vcf ",pops[j],"_ch",i,".vcf.gz --populations ",pops[j],"pop.txt --window_size 10000 --n_core 8 --output_prefix ",pops[j], "_ch",i, "\n"))
+    }
+    sink(NULL)
+}
+```
+
+```{bash eval=FALSE, include=FALSE}
+#Run pixy 
+bash runpixy_PWS17.sh
+#pixy script example:
+pixy --stats pi --vcf PWS17_ch26.vcf.gz --populations PWS17pop.txt --window_size 10000 --n_core 8 --output_prefix PWS17_ch26
+```
+
+
+### Plot the outputs from Pixy for all PWS groups
+```{r  echo=TRUE, message=FALSE, warning=FALSE}
+#read the output file for PWS:
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+
+for (p in 1 : length(pops)){
+    pixy<-data.frame()
+    for (i in 1:26){
+        df<-read.table(paste0("../Data/pixy/",pops[p],"/",pops[p],"_ch",i,"_pi.txt"), header=T)
+        df$method<-"Pixy"
+        df$WinCenter<-df$window_pos_2-5000
+        df<-df[,c("chromosome","WinCenter","avg_pi","method")]
+        colnames(df)[c(1,3)]<-c("Chr","pi")
+        pixy<-rbind(pixy, df)
+    }
+    write.csv(pixy, paste0("../Output/Pi/",pops[p], "_Pi_pixy_per50kWindow.csv"))
+    
+    #Compare with the pi estimated from ANGSD SFS 
+    theta<-read.delim(paste0('../Data/new_vcf/angsd/fromBam/unfolded/',pops[p],'_50kwin_10kstep.pestPG'))
+    theta$pi<-theta$tP/theta$nSites
+    theta$method<-"ANGSD"
+    pi<-rbind(pixy, theta[,c("Chr","WinCenter","pi","method")])
+
+    pi$Chr<-factor(pi$Chr, levels=paste0("chr",1:26))
+    ggplot(pi, aes(x=Chr, y=pi, color=method))+
+        geom_boxplot(aes(middle=mean(pi)),outlier.alpha = 0.2, outlier.size = 0.6)+
+        theme_classic()+theme(axis.text.x = element_text(angle=45, hjust =1))+
+        xlab("")+ylab(expression(pi))+ggtitle(pops[p])+
+        scale_color_manual(values=c("#1f78b4","#fb9a99"))
+    ggsave(paste0("../Output/Pi/Pi_comparison_pixy.vs.angsd.",pops[p], ".png"), width = 10, height = 5, dpi=100)
+    
+    # genome-wide mean pi comparison
+    means <- aggregate(pi ~  method, pi, mean)
+    
+    ggplot(pi, aes(x=method, y=pi))+
+        geom_boxplot(aes(color=method), outlier.alpha = 0.2, outlier.size = 0.6)+
+        theme_classic()+ ggtitle(pops[p])+
+        geom_point(stat = "summary", fun = "mean", color="gray40")+
+         xlab("")+ylab(expression(pi))+
+        scale_color_manual(values=c("#1f78b4","#fb9a99"), guide='none')+
+        geom_text(data = means, aes(label = round(pi, digits=5), y = pi + 0.02), color="gray40")
+    ggsave(paste0("../Output/Pi/Pi_comparison_pixy.vs.angsd_mean_",pops[p],".png"), width = 3, height = 3, dpi=200)
+}
+
+```
+
+![](../Output/Pi/Pi_comparison_pixy.vs.angsd_mean_PWS91.png){width=30%} ![PWS91](../Output/Pi/Pi_comparison_pixy.vs.angsd_PWS91.png){width=60%} 
+
+![PWS07](../Output/Pi/Pi_comparison_pixy.vs.angsd_mean_PWS07.png){width=30%}![](../Output/Pi/Pi_comparison_pixy.vs.angsd.PWS07.png){width=60%}  
+
+![PWS17](../Output/Pi/Pi_comparison_pixy.vs.angsd_mean_PWS17.png){width=30%}![](../Output/Pi/Pi_comparison_pixy.vs.angsd.PWS17.png){width=60%}  
+
+- **Pixy estimates have more variability**
+- **Pixy esitmates are slightly lower than ANSGD estiamtes**
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Assess the differences between ANGSD and Pixy
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+diff<-data.frame(pop=pops)
+for (p in 1 : length(pops)){
+    pixy<-data.frame()
+    for (i in 1:26){
+        df<-read.table(paste0("../Data/pixy/",pops[p],"/",pops[p],"_ch",i,"_pi.txt"), header=T)
+        df$method<-"Pixy"
+        df$WinCenter<-df$window_pos_2-5000
+        df<-df[,c("chromosome","WinCenter","avg_pi","method")]
+        colnames(df)[c(1,3)]<-c("Chr","pi")
+        pixy<-rbind(pixy, df)
+    }
+    #mean.pixy<-aggregate(pixy$pi, by=list(pixy$Chr), mean, na.rm=T)
+    
+    #Pi estimated from ANGSD SFS 
+    theta<-read.delim(paste0('../Data/new_vcf/angsd/fromBam/unfolded/',pops[p],'_50kwin_10kstep.pestPG'))
+    theta$pi<-theta$tP/theta$nSites
+    theta$method<-"ANGSD"
+    pi<-rbind(pixy, theta[,c("Chr","WinCenter","pi","method")])
+
+    means<-aggregate(pi$pi, by=list(pi$method), mean, na.rm=T)
+    
+    #differences in pi estimates
+    
+    diff$prop.difference[p]<-means$x[means$Group.1=="ANGSD"]/means$x[means$Group.1=="Pixy"]
+}
+
+
+knitr::kable(diff)
+
+```
+
+
+
+
+### Compare across years -PWS
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+Pi<-data.frame()
+for (i in 1:length(pops)){
+    pi<-read.csv(paste0("../Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
+    pi$Chr<-factor(pi$Chr, levels=paste0("chr",1:26))
+    pi$pop<-pops[i]
+    Pi<-rbind(Pi,pi)
+}
+
+Pi$pop<-factor(Pi$pop, levels=pops)
+
+means <- aggregate(pi ~ pop,Pi, mean)
+ggplot(Pi, aes(x=pop, y=pi, color=pop))+
+        geom_boxplot(aes(color=pop), outlier.alpha = 0.2, outlier.size = 0.6)+
+        theme_classic()+ ggtitle("PWS")+
+        geom_point(stat = "summary", fun = "mean", color="gray40")+
+         xlab("")+ylab(expression(pi))+
+        geom_text(data = means, aes(label = round(pi, digits=5), y = pi + 0.02), color="gray40")
+ggsave(paste0("../Output/Pi/Pi_pixy_mean.",pops[i],".png"), width = 4.5, height = 3, dpi=200)
+```
+
+![](../Output/Pi/Pi_pixy_mean.PWS.png){width=60%}
+
+
+```{r  echo=TRUE, message=FALSE, warning=FALSE}
+#read the output file for each pops:
+pops<-c("TB91","TB96","TB06","TB17")
+
+for (p in 1 : length(pops)){
+    pixy<-data.frame()
+    for (i in 1:26){
+        df<-read.table(paste0("../Data/pixy/",pops[p],"/",pops[p],"_ch",i,"_pi.txt"), header=T)
+        df$method<-"Pixy"
+        df$WinCenter<-df$window_pos_2-5000
+        df<-df[,c("chromosome","WinCenter","avg_pi","method")]
+        colnames(df)[c(1,3)]<-c("Chr","pi")
+        pixy<-rbind(pixy, df)
+    }
+    write.csv(pixy, paste0("../Output/Pi/",pops[p], "_Pi_pixy_per50kWindow.csv"))
+}
+
+Pi<-data.frame()
+for (i in 1:length(pops)){
+    pi<-read.csv(paste0("../Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
+
+    pi$Chr<-factor(pi$Chr, levels=paste0("chr",1:26))
+    ggplot(pi, aes(x=Chr, y=pi))+
+        geom_boxplot(aes(middle=mean(pi)),outlier.alpha = 0.2, outlier.size = 0.6,color="#1f78b4")+
+        theme_classic()+theme(axis.text.x = element_text(angle=45, hjust =1))+
+        xlab("")+ylab(expression(pi))+ggtitle(pops[i])
+    ggsave(paste0("../Output/Pi/Pi_pixy.perChrom.",pops[i], ".png"), width = 8.5, height = 5, dpi=300)
+    
+    pi$pop<-pops[i]
+    Pi<-rbind(Pi,pi)
+}
+
+Pi$pop<-factor(Pi$pop, levels=pops)
+means <- aggregate(pi ~ pop,Pi, mean)
+ggplot(Pi, aes(x=pop, y=pi, color=pop))+
+        geom_boxplot(aes(color=pop), outlier.alpha = 0.2, outlier.size = 0.6)+
+        theme_classic()+ ggtitle("TB")+
+        geom_point(stat = "summary", fun = "mean", color="gray40")+
+         xlab("")+ylab(expression(pi))+
+        geom_text(data = means, aes(label = round(pi, digits=5), y = pi + 0.02), color="gray40")
+ggsave(paste0("../Output/Pi/Pi_pixy_mean.TB.png"), width = 4.5, height = 3, dpi=200)
+```
+
+![](../Output/Pi/Pi_pixy_mean.TB.png){width=70%}
+
+
+```{r  echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+#read the output file for each SS pop:
+pops<-c("SS96","SS06","SS17")
+for (p in 1 : length(pops)){
+    pixy<-data.frame()
+    for (i in 1:26){
+        df<-read.table(paste0("../Data/pixy/",pops[p],"/",pops[p],"_ch",i,"_pi.txt"), header=T)
+        df$method<-"Pixy"
+        df$WinCenter<-df$window_pos_2-5000
+        df<-df[,c("chromosome","WinCenter","avg_pi","method")]
+        colnames(df)[c(1,3)]<-c("Chr","pi")
+        pixy<-rbind(pixy, df)
+    }
+    write.csv(pixy, paste0("../Output/Pi/",pops[p], "_Pi_pixy_per50kWindow.csv"))
+}
+
+Pi<-data.frame()
+for (i in 1:length(pops)){
+    pi<-read.csv(paste0("../Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
+    pi$Chr<-factor(pi$Chr, levels=paste0("chr",1:26))
+    ggplot(pi, aes(x=Chr, y=pi))+
+        geom_boxplot(aes(middle=mean(pi)),outlier.alpha = 0.2, outlier.size = 0.6,color="#1f78b4")+
+        theme_classic()+theme(axis.text.x = element_text(angle=45, hjust =1))+
+        xlab("")+ylab(expression(pi))+ggtitle(pops[i])
+    ggsave(paste0("../Output/Pi/Pi_pixy.perChrom.",pops[i], ".png"), width = 8.5, height = 5, dpi=300)
+    
+    pi$pop<-pops[i]
+    Pi<-rbind(Pi,pi)
+}
+
+Pi$pop<-factor(Pi$pop, levels=pops)
+means <- aggregate(pi ~ pop,Pi, mean)
+
+ggplot(Pi, aes(x=pop, y=pi, color=pop))+
+        geom_boxplot(aes(color=pop), outlier.alpha = 0.2, outlier.size = 0.6)+
+        theme_classic()+
+        geom_point(stat = "summary", fun = "mean", color="gray40")+
+         xlab("")+ylab(expression(pi))+ggtitle("SS")+
+        geom_text(data = means, aes(label = round(pi, digits=5), y = pi + 0.02), color="gray40")
+ggsave(paste0("../Output/Pi/Pi_pixy_mean.SS.png"), width = 4.5, height = 3, dpi=200)
+```
+
+![](../Output/Pi/Pi_pixy_mean.SS.png){width=60%}
+
+
+```{r  echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+ 
+#read the output file for each pops:
+pops<-c("BC17","CA17","WA17")
+for (p in 1 : length(pops)){
+    pixy<-data.frame()
+    for (i in 1:26){
+        df<-read.table(paste0("../Data/pixy/",pops[p],"/",pops[p],"_ch",i,"_pi.txt"), header=T)
+        df$method<-"Pixy"
+        df$WinCenter<-df$window_pos_2-5000
+        df<-df[,c("chromosome","WinCenter","avg_pi","method")]
+        colnames(df)[c(1,3)]<-c("Chr","pi")
+        pixy<-rbind(pixy, df)
+    }
+    write.csv(pixy, paste0("../Output/Pi/",pops[p], "_Pi_pixy_per50kWindow.csv"))
+}
+
+Pi<-data.frame()
+for (i in 1:length(pops)){
+    pi<-read.csv(paste0("../Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
+    pi$Chr<-factor(pi$Chr, levels=paste0("chr",1:26))
+    ggplot(pi, aes(x=Chr, y=pi))+
+        geom_boxplot(aes(middle=mean(pi)),outlier.alpha = 0.2, outlier.size = 0.6,color="#1f78b4")+
+        theme_classic()+theme(axis.text.x = element_text(angle=45, hjust =1))+
+        xlab("")+ylab(expression(pi))+ggtitle(pops[i])
+    ggsave(paste0("../Output/Pi/Pi_pixy.perChrom.",pops[i], ".png"), width = 8.5, height = 5, dpi=300)
+    
+    pi$pop<-pops[i]
+    Pi<-rbind(Pi,pi)
+}
+
+Pi$pop<-factor(Pi$pop, levels=pops)
+means <- aggregate(pi ~ pop,Pi, mean)
+
+ggplot(Pi, aes(x=pop, y=pi, color=pop))+
+        geom_boxplot(aes(color=pop), outlier.alpha = 0.2, outlier.size = 0.6)+
+        theme_classic()+
+        geom_point(stat = "summary", fun = "mean", color="gray40")+
+         xlab("")+ylab(expression(pi))+
+        geom_text(data = means, aes(label = round(pi, digits=5), y = pi + 0.02), color="gray40")
+#ggsave(paste0("../Output/Pi/Pi_pixy_mean.CA.BC.WA.png"), width = 4.5, height = 3, dpi=200)
+```
+
+```{r  echo=TRUE, message=FALSE, warning=FALSE}
+pops<-c("PWS91","PWS96","PWS07","PWS17","TB91","TB96","TB06","TB17","SS96","SS06","SS17")
+year<-c(1991,1996,2007,2017,1991,1996,2006,2017,1996,2006,2017)
+meanPi<-data.frame(pop.yr=pops, year=year)
+for (i in 1:length(pops)){
+    df<-read.csv(paste0("../Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
+    meanPi$mean[i]<-mean(df$pi, na.rm=T)
+    meanPi$pop[i]<-gsub("\\d.+","",pops[i])
+}
+
+
+ggplot(meanPi, aes(x=year, y=mean, color=pop))+
+    geom_point(size=3)+
+    geom_line()+
+    xlab("")+ylab(paste0("Mean ",expression(pi)))+
+    theme_linedraw()+
+    scale_color_manual(values=cols[c(2,1,5)])
+ggsave("../Output/Pi/Pi_overYears.PWS.TB.SS.png", width = 6, height = 4, dpi=300)
+
+```
+![](../Output/Pi/Pi_overYears.PWS.TB.SS.png){width=65%}
+
+
+```{r  echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+
+pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+year<-c(1991,1996,2006,2017,1991,1996,2007,2017,1996,2006,2017,2017,2017,2017)
+meanPi<-data.frame(pop.yr=pops, year=year)
+for (i in 1:length(pops)){
+    df<-read.csv(paste0("../Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
+    meanPi$mean[i]<-mean(df$pi, na.rm=T)
+    meanPi$pop[i]<-gsub("\\d.+","",pops[i])
+}
+
+#Mean pi comparison
+meanPi$pop.yr<-factor(meanPi$pop.yr, levels=pops)
+meanPi$pop<-factor(meanPi$pop, levels=c("TB","PWS","SS","BC","WA","CA"))
+
+ggplot(meanPi, aes(x=pop.yr, y=mean, color=pop))+
+    geom_point(size=3)+
+    xlab("")+ylab(paste0("Mean ",expression(pi)))+
+    theme_linedraw()+
+    scale_color_manual(values=cols[c(5,2,1, 4,6,7)])+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave("../Output/Pi/meanPi_estimated.from.Pixy.png", width = 6, height = 4, dpi=300)
+
+```
+![](../Output/Pi/meanPi_estimated.from.Pixy.png){width=70%}
+
+```{r  echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+
+pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+#year<-c(1991,1996,2006,2017,1991,1996,2007,2017,1996,2006,2017,2017,2017,2017)
+
+Pi<-data.frame()
+for (i in 1:length(pops)){
+    pi<-read.csv(paste0("../Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
+    pi$pop.yr<-pops[i]
+    pi$pop<-gsub("\\d.+","",pops[i])
+    Pi<-rbind(Pi,pi)
+}
+
+Pi$pop.yr<-factor(Pi$pop.yr, levels=pops)
+Pi$pop<-factor(Pi$pop, levels=c("TB","PWS","SS","BC","WA","CA"))
+#means <- aggregate(pi ~ pop.yr,Pi, mean)
+ggplot(Pi, aes(x=pop.yr, y=pi, color=pop))+
+    geom_boxplot(aes(color=pop), outlier.alpha = 0.2, outlier.size = 0.6)+
+    theme_classic()+ 
+    geom_point(stat = "summary", fun = "mean", color="gray40")+
+    xlab("")+ylab(expression(pi))+
+    geom_point(stat="summary", fun=mean)+
+    scale_color_manual(values=cols[c(5,2,1, 4,6,7)])
+    #geom_text(data = means, aes(label = round(pi, digits=5), y = pi + 0.02), color="gray40")
+ggsave(paste0("../Output/Pi/Pi_pixy_all_boxplot.png"), width = 4.5, height = 3, dpi=200)
+
+ggplot(Pi, aes(x=pop.yr, y=pi, color=pop, fill=pop))+
+    geom_boxplot(aes(color=pop), outlier.alpha = 0.1, outlier.size = 0.3)+
+    theme_classic()+
+    geom_point(stat = "summary", fun = "mean", color="gray40")+
+    xlab("")+ylab(expression(pi))+ylim(0,0.0047)+
+    geom_point(stat="summary", fun=mean, size=2.5)+
+    scale_color_manual(values=cols)+
+    scale_fill_manual(values=paste0(cols, "99"))+
+    theme(axis.title.y =  element_text(size=15), legend.title = element_blank())
+    
+ggsave(paste0("../Output/Pi/Pi_pixy_all_boxplot_zoomed2.png"), width = 8, height = 3.4, dpi=300)
+```
+![](../Output/Pi/Pi_pixy_all_boxplot_zoomed.png){width=75%}
+
+
+
+### Bootstrap pi values to get 95% CI
+
+```{r}
+
+# average theta values across sites
+
+#############
+# Parameters
+#############
+# number of chromosomes in each sample
+#nchrCan40 <- 42 # sample size in # chromosomes
+#nchrCan14 <- 48
+#nchrLof07 <- 44
+#nchrLof11 <- 48
+#nchrLof14 <- 44
+
+nboot <- 1000
+
+nchr=26
+
+####################
+# load functions
+require(data.table)
+require(boot) # for bootstrap CIs
+
+
+# For Tajima's D calcs. After https://github.com/ANGSD/angsd/blob/master/misc/stats.cpp
+a1f <- function(nsam) return(sum(1/seq(1, nsam-1)))
+a2f <- function(nsam) return(sum(1/(seq(1, nsam-1)*seq(1, nsam-1))))
+b1f <- function(nsam) return((nsam + 1)/(3*(nsam-1)))
+b2f <- function(nsam) return((2*(nsam*nsam + nsam + 3))/(9*nsam*(nsam - 1)))
+c1f <- function(a1, b1) return(b1 - (1/a1))
+c2f <- function(nsam, a1, a2, b2) return(b2 - ((nsam + 2)/(a1*nsam)) + (a2/(a1 * a1)))
+e1f <- function(a1, c1) return(c1/a1)
+e2f <- function(a1, a2, c2) return(c2/((a1*a1) + a2))
+
+# Tajima's D calculation
+# nsam: sample size
+# thetaW: Watterson's theta (# segregating sites / a1)
+# sumk: theta pi (average number of SNPs in pairwise comparisons)
+# after https://github.com/ANGSD/angsd/blob/master/misc/stats.cpp
+tajd <- function(nsam, thetaW, sumk){
+	a1 <- a1f(nsam)
+	segsites <- thetaW * a1
+	if(segsites == 0) return(0)
+	a2 <- a2f(nsam)
+	b1 <- b1f(nsam)
+  	b2 <- b2f(nsam)
+	c1 <- c1f(a1, b1)
+	c2 <- c2f(nsam, a1, a2, b2)
+	e1 <- e1f(a1, c1)
+	e2 <- e2f(a1, a2, c2)
+	res <- (sumk - (thetaW))/sqrt((e1*segsites) + ((e2*segsites)*(segsites-1)))
+	return(res)
+}
+
+# calc thetas
+calcthetas <- function(dat, nchr, nloci){
+	# calc ave theta
+	thetas <- as.numeric(dat[, .(tW = sum(exp(Watterson)/nloci, na.rm = TRUE), tP = sum(exp(Pairwise)/nloci, na.rm = TRUE))])
+
+	# calculate Tajima's D
+	thetas[3] <- tajd(nchr, thetas[1], thetas[2])
+	
+	#return
+	names(thetas) <- c('tW', 'tP', 'tD')
+	return(thetas)
+}
+
+# calculate stats from specified LGs for block bootstrapping across LGs
+thetablock <- function(lgs, indices, alldata, nchr, regs){
+	# make bootstrapped dataset
+	mydata <- do.call("rbind", lapply(indices, function(n) subset(alldata, Chromo==lgs[n])))
+	
+	# calculate number of callable loci, given the LGs in this bootstrapped sample
+	nloci <- regs[Chromo %in% lgs, .(len = Pos2 - Pos1 + 1), by = .(Chromo, Pos1)][, sum(len)] # sum of bp in the callable region
+	
+	# calc thetas
+	thetas <- calcthetas(mydata, nchr, nloci)
+	
+	# return
+	return(thetas)
+}
+
+#using window based angsd file (use preknown loci in 50000 windows)
+thetablock2 <- function(lgs, indices, alldata, nchr, regs){
+	# make bootstrapped dataset
+	mydata <- do.call("rbind", lapply(indices, function(n) subset(alldata, Chromo==lgs[n])))
+	
+	# calculate number of callable loci, given the LGs in this bootstrapped sample
+	#nloci <- regs[Chromo %in% lgs, .(len = Pos2 - Pos1 + 1), by = .(Chromo, Pos1)][, sum(len)] # sum of bp in the callable region
+
+	nloci <- alldata[Chromo %in% lgs,sum(nSites)] # sum of bp in the callable region
+	
+	# calc thetas
+	thetas <- calcthetas(mydata, nchr, nloci)
+	
+	# return
+	return(thetas)
+}
+
+
+######################
+# Load data
+######################
+alldata<-dat
+# load all loci theta calcs
+dat<-fread('../Data/new_vcf/angsd/fromVCF/BC17_maf00.thetas50kWindow.gz.pestPG')
+setnames(dat, 'Chr', 'Chromo')
+
+datCan40 <- fread('analysis/thetas.Can_40.pestPG.gz')
+datCan14 <- fread('analysis/thetas.Can_14.pestPG.gz')
+datLof07 <- fread('analysis/thetas.Lof_07.pestPG.gz')
+datLof11 <- fread('analysis/thetas.Lof_11.pestPG.gz')
+datLof14 <- fread('analysis/thetas.Lof_14.pestPG.gz')
+
+# gatk loci
+datCan40gatk <- fread('analysis/thetas.Can_40.gatk.pestPG.gz')
+datCan14gatk <- fread('analysis/thetas.Can_14.gatk.pestPG.gz')
+datLof07gatk <- fread('analysis/thetas.Lof_07.gatk.pestPG.gz')
+datLof11gatk <- fread('analysis/thetas.Lof_11.gatk.pestPG.gz')
+datLof14gatk <- fread('analysis/thetas.Lof_14.gatk.pestPG.gz')
+
+# fix name
+setnames(datCan40, '#Chromo', 'Chromo')
+setnames(datCan14, '#Chromo', 'Chromo')
+setnames(datLof07, '#Chromo', 'Chromo')
+setnames(datLof11, '#Chromo', 'Chromo')
+setnames(datLof14, '#Chromo', 'Chromo')
+
+setnames(datCan40gatk, '#Chromo', 'Chromo')
+setnames(datCan14gatk, '#Chromo', 'Chromo')
+setnames(datLof07gatk, '#Chromo', 'Chromo')
+setnames(datLof11gatk, '#Chromo', 'Chromo')
+setnames(datLof14gatk, '#Chromo', 'Chromo')
+
+windownames<-colnames(dat)[1]
+colnames(dat)[1]<-"window"
+## list of callable regions
+
+dat$window<-gsub("\\(",'', dat$window)
+dat$window<-gsub("\\)$",'', dat$window)
+dat$window<-gsub("\\)",',', dat$window)
+windows1<-str_split_fixed(dat$window,",",6) 
+colnames(windows1)<-c('IndexStart', 'IndexStop','firstPos_withData','lastPos_withData','WinStart','WinStop')
+
+dat<-cbind(windows1, dat)
+
+regs<-dat[,c("Chromo","WinStart","WinStop")]
+names(regs)<-c('Chromo', 'Pos1', 'Pos2')
+#regs <- fread('data_2020.05.07/Callable_bases_gadmor2.bed')
+#setnames(regs, c('Chromo', 'Pos1', 'Pos2'))
+#
+## list of no damage sites
+#nodam <- fread('data_2020.05.07/GATK_filtered_SNP_no_dam2.tab')
+#setnames(nodam, c('Chromo', 'Pos', 'REF', 'ALT'))
+#
+#
+## remove unplaced
+#datCan40 <- datCan40[grep('Unplaced', Chromo, invert = TRUE), ]
+#datCan14 <- datCan14[grep('Unplaced', Chromo, invert = TRUE), ]
+#datLof07 <- datLof07[grep('Unplaced', Chromo, invert = TRUE), ]
+#datLof11 <- datLof11[grep('Unplaced', Chromo, invert = TRUE), ]
+#datLof14 <- datLof14[grep('Unplaced', Chromo, invert = TRUE), ]
+#
+#datCan40gatk <- datCan40gatk[grep('Unplaced', Chromo, invert = TRUE), ]
+#datCan14gatk <- datCan14gatk[grep('Unplaced', Chromo, invert = TRUE), ]
+#datLof07gatk <- datLof07gatk[grep('Unplaced', Chromo, invert = TRUE), ]
+#datLof11gatk <- datLof11gatk[grep('Unplaced', Chromo, invert = TRUE), ]
+#datLof14gatk <- datLof14gatk[grep('Unplaced', Chromo, invert = TRUE), ]
+
+regs <- regs[Chromo != 'Unplaced', ]
+nodam <- nodam[Chromo != 'Unplaced', ]
+
+###################################################
+# create table of loci trimmed to no damage sites
+###################################################
+
+datCan40gatknd <- merge(datCan40, nodam[, .(Chromo, Pos)], by = c('Chromo', 'Pos')) # trim
+datCan14gatknd <- merge(datCan14, nodam[, .(Chromo, Pos)], by = c('Chromo', 'Pos')) # trim
+datLof07gatknd <- merge(datLof07, nodam[, .(Chromo, Pos)], by = c('Chromo', 'Pos')) # trim
+datLof11gatknd <- merge(datLof11, nodam[, .(Chromo, Pos)], by = c('Chromo', 'Pos')) # trim
+datLof14gatknd <- merge(datLof14, nodam[, .(Chromo, Pos)], by = c('Chromo', 'Pos')) # trim
+
+
+################################
+# Run theta calculations
+################################
+#nloci <- regs[, .(len = Pos2 - Pos1 + 1), by = .(Chromo, Pos1)][, sum(len)] # sum of bp in the callable region
+
+nloci<-dat$nSites
+
+# all loci
+calcthetas(dat, nchr, nloci)
+calcthetas(datCan14, nchrCan14, nloci)
+calcthetas(datLof07, nchrLof07, nloci)
+calcthetas(datLof11, nchrLof11, nloci)
+calcthetas(datLof14, nchrLof14, nloci)
+
+# gatk loci
+calcthetas(datCan40gatk, nchrCan40, nloci)
+calcthetas(datCan14gatk, nchrCan14, nloci)
+calcthetas(datLof07gatk, nchrLof07, nloci)
+calcthetas(datLof11gatk, nchrLof11, nloci)
+calcthetas(datLof14gatk, nchrLof14, nloci)
+
+# gatk no damage loci
+calcthetas(datCan40gatknd, nchrCan40, nloci)
+calcthetas(datCan14gatknd, nchrCan14, nloci)
+calcthetas(datLof07gatknd, nchrLof07, nloci)
+calcthetas(datLof11gatknd, nchrLof11, nloci)
+calcthetas(datLof14gatknd, nchrLof14, nloci)
+
+
+
+
+# block bootstrapping across LGs
+
+#lgs <- datCan40[, sort(unique(Chromo))]
+datlist <- list(datCan40, datCan14, datLof07, datLof11, datLof14, 
+				datCan40gatk, datCan14gatk, datLof07gatk, datLof11gatk, datLof14gatk,
+				datCan40gatknd, datCan14gatknd, datLof07gatknd, datLof11gatknd, datLof14gatknd)
+names(datlist) <- c('Can40 all loci', 'Can14 all loci', 'Lof07 all loci', 'Lof11 all loci', 'Lof14 all loci', 
+					'Can40 gatk loci', 'Can14 gatk loci', 'Lof07 gatk loci', 'Lof11 gatk loci', 'Lof14 gatk loci',
+					'Can40 gatk no dam loci', 'Can14 gatk no dam loci', 'Lof07 gatk no dam loci', 'Lof11 gatk no dam loci', 
+					'Lof14 gatk no dam loci')
+nchrlist <- list(nchrCan40, nchrCan14, nchrLof07, nchrLof11, nchrLof14, nchrCan40, nchrCan14, nchrLof07, nchrLof11, nchrLof14, nchrCan40, nchrCan14, nchrLof07, nchrLof11, nchrLof14)
+
+thetabootout <- data.frame(type = names(datlist), tW = NA, tWl95 = NA, tWu95 = NA, tP = NA, tPl95 = NA, tPu95 = NA, tD = NA, tDl95 = NA, tDu95 = NA)
+
+
+#####
+
+lgs <- dat[, sort(unique(Chromo))]
+
+bootlg <- boot(lgs, thetablock2, nboot,  alldata = dat, nchr = nchr, regs = regs)
+
+
+for(i in 1:length(datlist)){
+	print(names(datlist)[i])
+    
+    
+	bootlg <- boot(lgs, thetablock, nboot,  alldata = datlist[[i]], nchr = nchrlist[[i]], regs = regs)
+	
+	print(bootlg)
+	ciW <- boot.ci(bootlg, type = c('perc'), index = 1)
+	ciP <- boot.ci(bootlg, type = c('perc'), index = 2)
+	ciD <- boot.ci(bootlg, type = c('perc'), index = 3)
+	
+	thetabootout$tW[i] <- bootlg$t0[1] # the point estimates
+	thetabootout$tP[i] <- bootlg$t0[2]	
+	thetabootout$tD[i] <- bootlg$t0[3]
+
+	thetabootout$tWl95[i] <- ciW$percent[4] # the confidence intervals
+	thetabootout$tWu95[i] <- ciW$percent[5]
+
+	thetabootout$tPl95[i] <- ciP$percent[4]
+	thetabootout$tPu95[i] <- ciP$percent[5]
+
+	thetabootout$tDl95[i] <- ciD$percent[4]
+	thetabootout$tDu95[i] <- ciD$percent[5]
+}
+
+# save
+write.csv(thetabootout, file = 'analysis/thetas.boot.cis.csv')
+
+```
+
+
+
+

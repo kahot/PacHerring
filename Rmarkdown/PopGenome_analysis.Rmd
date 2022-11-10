@@ -1,0 +1,536 @@
+---
+title: "Analysis with PopGenome"
+ html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: false
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+---
+
+
+```{r}
+library(tidyverse)
+library(PopGenome)
+#this will read all VCF files in the directory
+pws <- readData("../Data/new_vcf/PWS/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+
+get.sum.data(pws)
+
+```
+
+```{r}
+#pws@populations  #Currently NULL
+#read population sample info and assign to pws
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pws_info<-pop_info[pop_info$pop=="PWS",c("Sample","Population.Year")]
+
+populations <- split(pws_info$Sample, pws_info$Population.Year)
+
+pws<-set.populations(pws, populations, diploid = T)
+#pws@populations  
+
+# set the chromosome size
+chr1<-33082446
+
+# set window size and window jump
+window_size <- 50000
+window_jump <- 10000
+
+# use seq to find the start points of each window
+window_start <- seq(from = 1, to = chr1, by = window_jump)
+# add the size of the window to each start point 
+window_stop <- window_start + window_size
+
+window_start <- window_start[which(window_stop < chr1)]
+window_stop <- window_stop[which(window_stop < chr1)]
+
+# save as a data.frame
+windows <- data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+# make a sliding window dataset
+pws_sw <- sliding.window.transform(pws, width = 50000, jump = 10000, type = 2)
+
+```
+
+## Calculate diversity statistics
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+pws_sw <- diversity.stats(pws_sw, pi = TRUE)
+pws_sw <- F_ST.stats(pws_sw, mode = "nucleotide")
+
+# extract nucleotide diversity and correct for window size
+nd <- pws_sw@nuc.diversity.within/50000
+
+# make population name vector
+pops <- unique(pws_info$Population.Year)
+
+# set population names
+colnames(nd) <- paste0(pops, "_pi")
+
+# extract fst values
+fst <- t(pws_sw@nuc.F_ST.pairwise)
+
+# extract dxy - pairwise absolute nucleotide diversity
+dxy <- get.diversity(pws_sw, between = T)[[2]]/50000
+
+# get column names 
+x <- colnames(fst)
+# does the same thing as above but by indexing the pops vector
+x <- sub("pop1", pops[1], x)
+x <- sub("pop2", pops[2], x)
+x <- sub("pop3", pops[3], x)
+x <- sub("pop4", pops[4], x)
+x <- sub("pop5", pops[5], x)
+# replace forward slash
+x <- sub("/", "_", x)
+
+colnames(fst)<-paste0("fst_",x)
+colnames(dxy)<-paste0("dxy_",x)
+
+#combine all data
+pws_data <- as_tibble(data.frame(windows, nd, fst, dxy))
+
+# select data of interest
+hs <- pws_data %>% select(mid, PWS07_pi, PWS96_pi, fst_PWS07_PWS96, dxy_PWS07_PWS96)
+# use gather to rearrange everything
+hs_g <- gather(hs, -mid, key = "stat", value = "value")
+
+
+#setting a function to change facet labels
+plot_labeller <- function(variable,value){
+  if (variable=='facet1') {
+    return(facet1_names[value])
+  } else if (variable=='facet2') {
+    return(facet2_names[value])
+  } else {
+    return(as.character(value))
+  }
+}
+
+#Plot the results
+hs_g$stat<-factor(hs_g$stat, levels=c("fst_PWS07_PWS96",  "PWS96_pi","PWS07_pi", "dxy_PWS07_PWS96"))
+stat_names <- c(
+  `fst_PWS07_PWS96`="Fst",
+  `PWS96_pi`="PWS96_pi",
+  `PWS07_pi`="PWS07_pi",
+  `dxy_PWS07_PWS96`="Dxy"
+)
+
+ggplot(hs_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+    facet_grid(stat~., scales = "free_y", labeller =as_labeller(stat_names))+
+    xlab("Position (Mb)")+ylab('')+
+    theme_light() + theme(legend.position = "none")
+
+```
+
+## Repeat the above for all population combinations 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+comb<-combn(pops, 2)
+comb<-t(comb)
+
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    dt<-pws_data[, c("mid", paste0(pop1,"_pi"), paste0(pop2,"_pi"), paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2))]
+    colnames(dt)[4:5]<-c("Fst","Dxy")
+    
+    dt_g<-gather(dt, -mid, key = "stat", value = "value")
+    dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy", paste0(pop1,"_pi"),paste0(pop2,"_pi")))
+    ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+        facet_grid(stat~., scales = "free_y")+
+        xlab("Position (Mb)")+ylab('')+
+        theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr1 ",pop1," vs.", pop2))
+    ggsave(paste0("../Output/Dxy/PWS/Diversity_stats_chr1_",pop1," vs.", pop2,".png"), width = 9, height = 5, dpi=150)
+}
+```
+
+
+## Make the same figures for diversity stats for all choromosomes 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+Chrsize<-read.delim("../Data/new_vcf/chr_sizes.bed", header = F)
+window_size <- 50000
+window_jump <- 10000
+pops <- unique(pws_info$Population.Year)
+# set column names 
+x <- colnames(fst)
+x <- sub("pop1", pops[1], x)
+x <- sub("pop2", pops[2], x)
+x <- sub("pop3", pops[3], x)
+x <- sub("pop4", pops[4], x)
+x <- sub("pop5", pops[5], x)
+# replace forward slash
+x <- sub("/", "_", x)
+    
+for (c in 3:26){
+    pws <- readData(paste0("../Data/new_vcf/PWS/chr",c,"/"), format = "VCF", include.unknown = TRUE, FAST = TRUE)
+    pws<-set.populations(pws, populations, diploid = T)
+    chr<-Chrsize$V3[c]
+    pws_sw <- sliding.window.transform(pws, width = 50000, jump = 10000, type = 2)
+    # create a sliding window data frame
+    windows<-pws_sw@region.names
+    windows<-gsub(" ","", windows)
+    windows<-gsub(":","",windows)
+    window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+    window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+    window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+    
+    #calculate different statistics
+    pws_sw <- diversity.stats(pws_sw, pi = TRUE)
+    pws_sw <- F_ST.stats(pws_sw, mode = "nucleotide")
+    nd <- pws_sw@nuc.diversity.within/50000
+    colnames(nd) <- paste0(pops, "_pi")
+    fst <- t(pws_sw@nuc.F_ST.pairwise)
+    dxy <- get.diversity(pws_sw, between = T)[[2]]/50000
+
+    colnames(fst)<-paste0("fst_",x)
+    colnames(dxy)<-paste0("dxy_",x)
+
+    #combine all data
+    n<-length(fst)
+    #data<-cbind(window[1:n,], nd, fst, dxy)
+    pws_data <- as_tibble(data.frame(window[1:n,], nd, fst, dxy))
+    
+    for (i in 1: nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        dt<-pws_data[, c("mid", paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2))]
+        colnames(dt)[2:3]<-c("Fst","Dxy")
+    
+        dt_g<-gather(dt, -mid, key = "stat", value = "value")
+        dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy"))
+        ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+        facet_grid(stat~., scales = "free_y")+
+        xlab("Position (Mb)")+ylab('')+
+        theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr",c," ",pop1," vs.", pop2))+
+        scale_x_continuous(minor_breaks = seq(1, chr,1 ))
+        ggsave(paste0("../Output/Dxy/PWS/Diversity_stats_chr",c,"_",pop1," vs.", pop2,".png"), width = 9, height = 2.6, dpi=150)
+        print(i)
+    }
+    print(c)
+}
+
+```
+
+
+
+## Create Dxy Fst plots for ANGSD data
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(pops,2))
+
+fst<-data.frame()
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_",pop1,"_",pop2,"_50kWindow_maf00"))
+    conames<-colnames(df)[2:4]
+    colnames(df)[4]<-"Fst"
+    colnames(df)[1:3]<-conames
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    df$loc<-1:nrow(df)
+    fst<-rbind(fst, df)
+}
+
+dxy<-data.frame()
+for (i in 1:nrow(comb)){ 
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.csv(paste0("../Output/Dxy/",pop1,"_",pop2, "_maf01_Dxy_50kwin_10kstep.csv"), row.names = 1)
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    #df$loc<-1:nrow(df)
+    dxy<-rbind(dxy,df)
+}
+
+#pi
+pi<-data.frame()
+for (i in 1:length(pops)){
+    df<-read.delim(paste0('../Data/new_vcf/angsd/fromBam/unfolded/',pops[i],'_50kwin_10kstep.pestPG'))
+    df$pi<-df$tP/df$nSites
+    df<-df[,c("Chr","WinCenter","pi" )]
+    df$pop<-pops[i]    
+    pi<-rbind(pi, df)
+}
+
+for (c in 1:26){
+    ch<-paste0("chr",c)
+    fst1<-fst[fst$chr==ch,]
+    dxy1<-dxy[dxy$chromo==ch,]
+    pi1<-pi[pi$Chr==ch,]
+
+    for (i in 1:nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        pair<-paste0(pop1,".vs.",pop2)
+        fst_pop<-fst1[fst1$pop==pair,]
+        dxy_pop<-dxy1[dxy1$pop==pair,]
+        pi_pop<-pi1[pi1$pop==pop1,]
+        colnames(pi_pop)[3]<-paste0(pop1,"_pi")
+        pi_pop2<-pi1[pi1$pop==pop2,]
+        colnames(pi_pop2)[3]<-paste0(pop2,"_pi")
+        pi_pop<-merge(pi_pop[,1:3], pi_pop2[,2:3], by="WinCenter")
+        stat_pop<-merge(fst_pop[,c("midPos","Fst")], dxy_pop[,c("win_mid", "dxy")], by.x="midPos", by.y= "win_mid")
+        stat_pop<-merge(stat_pop, pi_pop, by.x="midPos", by.y="WinCenter")
+        stat_popm<-melt(stat_pop, id.vars = c("Chr","midPos"), variable.name = "stat")
+        
+        ggplot(stat_popm, aes(midPos/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr",c," ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, max(fst1$midPos),1 ))
+        ggsave(paste0("../Output/Dxy/PWS/ANGSD_Diversity_stats_chr",c,"_",pop1," vs.", pop2,".png"), width = 9, height = 5, dpi=150)
+    }
+}
+```
+Plot an example
+![](../Output/Dxy/PWS/ANGSD_Diversity_stats_chr25_PWS96 vs.PWS07.png)
+
+```{R echo=FALSE, message=FALSE, warning=FALSE}
+## Plot chromosome together
+#prep for the figure
+evens<-paste0("chr",seq(2,26, by=2))
+#add chromosome number
+df<-fst[fst$pop=="PWS91.vs.PWS96",]
+rows<-data.frame(chr=1:26)
+for (i in 1:26){
+    if (i ==1){
+        rows$n[i]<-nrow(df[df$ch==i,])
+        rows$middle[i]<-nrow(df[df$ch==i,])/2
+    }
+    if (i >1){
+        rows$n[i]<-nrow(df[df$ch==i,])
+        rows$middle[i]<-sum(rows$n[1:(i-1)])+rows$n[i]/2
+    }
+}
+
+for (i in 2:nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        pair<-paste0(pop1,".vs.",pop2)
+        fst_pop<-fst[fst$pop==pair,]
+        dxy_pop<-dxy[dxy$pop==pair,]
+        pi_pop<-pi[pi$pop==pop1,]
+        colnames(pi_pop)[3]<-paste0(pop1,"_pi")
+        pi_pop2<-pi[pi$pop==pop2,]
+        colnames(pi_pop2)[3]<-paste0(pop2,"_pi")
+        pi_pop<-merge(pi_pop[,1:3], pi_pop2[,1:3], by=c("Chr","WinCenter"))
+        stat_pop<-merge(fst_pop[,c("chr","midPos","Fst")], dxy_pop[,c("chromo","win_mid", "dxy")], by.x=c("chr","midPos"), by.y= c("chromo","win_mid"))
+        stat_pop<-merge(stat_pop, pi_pop, by.x=c("chr","midPos"), by.y=c("Chr","WinCenter"))
+        stat_pop$ch=as.integer(gsub("chr","", stat_pop$chr))
+        stat_pop<-stat_pop[order(stat_pop$ch, stat_pop$midPos),]
+        stat_pop$loc<-1:nrow(stat_pop)
+        
+        stat_popm<-melt(stat_pop[,c(1:6,8)], id.vars = c("chr","midPos","loc"), variable.name = "stat")
+        stat_popm$color<-"col1"
+        stat_popm$color[stat_popm$chr %in% evens]<-"col2"
+        
+        ggplot(stat_popm[stat_popm$chr %in% paste0("chr",1:13),], aes(loc, value, colour = color))+
+            geom_point(size=0.2)+facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0(pop1," vs.", pop2))+
+            scale_x_continuous(breaks=rows$middle[1:13], labels=1:13)+
+            scale_color_manual(values=c("lightblue","steelblue"))
+        ggsave(paste0("../Output/Dxy/PWS/ANGSD_chr1-13_diversity_stats_",pop1," vs.", pop2,"_point.png"), width = 15, height = 5, dpi=150)
+        
+        ggplot(stat_popm[stat_popm$chr %in% paste0("chr",14:26),], aes(loc, value, colour = color))+
+            geom_point(size=0.2)+facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0(pop1," vs.", pop2))+
+            scale_x_continuous(breaks=rows$middle[14:26], labels=14:26)+
+            scale_color_manual(values=c("lightblue","steelblue"))
+        ggsave(paste0("../Output/Dxy/PWS/ANGSD_chr14-26_diversity_stats_",pop1," vs.", pop2,"_point.png"), width = 15, height = 5, dpi=150)
+}
+```        
+![](../Output/Dxy/PWS/ANGSD_chr1-13_diversity_stats_PWS96 vs.PWS07_point.png)
+![](../Output/Dxy/PWS/ANGSD_chr14-26_diversity_stats_PWS96 vs.PWS07_point.png)
+
+### any correlation between Nsites and Fst?
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+pairs<-unique(fst$pop)
+### any correctiona between Nsites and Fst?
+cor.test(fst$Nsites, fst$Fst)
+#t = -49.56, df = 434323, p-value < 2.2e-16
+#       cor 
+#-0.0749894 
+#Slight negative correlation
+cor.test(fst$Nsites[fst$pop==pairs[1]], fst$Fst[fst$pop==pairs[1]]) #0.07365687
+cor.test(fst$Nsites[fst$pop==pairs[2]], fst$Fst[fst$pop==pairs[2]]) #-0.1844797
+cor.test(fst$Nsites[fst$pop==pairs[3]], fst$Fst[fst$pop==pairs[3]]) #-0.2499349
+cor.test(fst$Nsites[fst$pop==pairs[4]], fst$Fst[fst$pop==pairs[4]]) #-0.3148754
+cor.test(fst$Nsites[fst$pop==pairs[5]], fst$Fst[fst$pop==pairs[5]]) #0.1166028 
+cor.test(fst$Nsites[fst$pop==pairs[6]], fst$Fst[fst$pop==pairs[6]]) #-0.1953831
+#Correlation: 2 are positive, 3 are negative
+plot(fst$Nsites, fst$Fst, pch=".")
+```
+
+```{R}
+hist(fst$Fst, breaks=100)
+```
+
+```{R}
+hist(fst$Nsites, breaks=50)
+```
+
+```{R echo=TRUE, message=FALSE, warning=FALSE}
+#Remove the sites <1000 and compare
+fst2<-fst[fst$Nsites>=1000,]
+cor.test(fst2$Nsites, fst2$Fst)
+#t = -64.056, df = 356673, p-value < 2.2e-16
+#-0.1066457
+cor.test(fst2$Nsites[fst2$pop==pairs[1]], fst2$Fst[fst2$pop==pairs[1]]) #0.06638527
+cor.test(fst2$Nsites[fst2$pop==pairs[2]], fst2$Fst[fst2$pop==pairs[2]]) #-0.2305493
+cor.test(fst2$Nsites[fst2$pop==pairs[3]], fst2$Fst[fst2$pop==pairs[3]]) #-0.2150491 
+cor.test(fst2$Nsites[fst2$pop==pairs[4]], fst2$Fst[fst2$pop==pairs[4]]) #-0.3271661 
+cor.test(fst2$Nsites[fst2$pop==pairs[5]], fst2$Fst[fst2$pop==pairs[5]]) #0.07443567 
+cor.test(fst2$Nsites[fst2$pop==pairs[6]], fst2$Fst[fst2$pop==pairs[6]]) #-0.2398893
+
+
+fst3<-fst[fst$Nsites>=2000,]
+cor.test(fst3$Nsites, fst3$Fst)
+cor.test(fst3$Nsites[fst3$pop==pairs[1]], fst3$Fst[fst3$pop==pairs[1]]) #0.06638527
+cor.test(fst3$Nsites[fst3$pop==pairs[2]], fst3$Fst[fst3$pop==pairs[2]]) #-0.2305493
+cor.test(fst3$Nsites[fst3$pop==pairs[3]], fst3$Fst[fst3$pop==pairs[3]]) #-0.2150491 
+cor.test(fst3$Nsites[fst3$pop==pairs[4]], fst3$Fst[fst3$pop==pairs[4]]) #-0.3271661 
+cor.test(fst3$Nsites[fst3$pop==pairs[5]], fst3$Fst[fst3$pop==pairs[5]]) #0.07443567 
+cor.test(fst3$Nsites[fst3$pop==pairs[6]], fst3$Fst[fst3$pop==pairs[6]]) #-0.2398893
+
+plot(fst3$Nsites, fst3$Fst,pch=".")
+```
+
+```{R echo=TRUE, message=FALSE, warning=FALSE}
+plot(fst$Nsites[fst3$pop==pairs[1]], fst$Fst[fst3$pop==pairs[1]], pch=".")
+plot(fst$Nsites[fst3$pop==pairs[2]], fst$Fst[fst3$pop==pairs[2]], pch=".")
+
+
+range(fst$Fst)
+
+high<-fst[fst$Fst>=0.05,]
+high$Nsites
+
+
+```
+
+```{r}
+#look at the chr25
+pw1<-read.delim("../Data/new_vcf/angsd/fromVCF/2D/fst_PWS96_PWS07_persite_maf00.txt", header=F)
+#table of # of snps per chromosome
+#The realSFS fst print prints out the alphas (3rd) and the betas (4th column) >take the ratio between these or the ratio between the sums of these to calculate Fst. Unweighted Fst = the sum of ratios. Weighted Fst =the ratio of sums. 
+snps<-data.frame(chr=1:26)
+for (i in 1:26){
+    snps$number[i]<-nrow(pw1[pw1$V1==paste0("chr", i),])
+}
+write.csv(snps,"../Data/new_vcf/snp_count_maf00.csv")
+
+ch25<-pw1[pw1$V1 =="chr25",]
+ch25$Fst<-ch25$V3/ch25$V4
+mean(ch25$Fst, na.rm=T) #0.01236265
+
+
+mean(fst$Fst[fst$pop=="PWS96.vs.PWS07"&fst$chr=="chr25"], na.rm = T)
+fst25<-fst[fst$pop=="PWS96.vs.PWS07"&fst$chr=="chr25",]
+
+sum(ch25$V3[1:827])/sum(ch25$V4[1:827])
+sum(ch25$V3[1:827]/ch25$V4[1:827])
+
+df<-ch25[ch25$V2>=800000&ch25$V2<=830000,]
+plot(ch25$V2[ch25$V2>=800000&ch25$V2<=830000], ch25$Fst[ch25$V2>=800000&ch25$V2<=830000])
+
+#High Fst at 822513 & 822541
+
+#look at the maf file
+maf96<-read.delim(paste0('../Data/new_vcf/AF/maf01/PWS96_maf01.mafs'))
+maf07<-read.delim(paste0('../Data/new_vcf/AF/maf01/PWS07_maf01.mafs'))
+maf96a<-maf96[maf96$chromo=="chr25",]
+maf07a<-maf07[maf07$chromo=="chr25",]
+
+{plot(maf96a$position[maf96a$position>=810000&maf96a$position<=830000],maf96a$knownEM[maf96a$position>=810000&maf96a$position<=830000],pch=16, col="blue", xlab="position", ylab="AF" )
+points(maf07a$position[maf07a$position>=810000&maf07a$position<=830000],maf07a$knownEM[maf07a$position>=810000&maf07a$position<=830000],pch=16, col="red")}
+```
+
+Plot AF from PWSonly files
+```{r}
+#Look at PWS only allele freq.
+#This file was created in EstimateNe.Rmd 
+pws<-read.csv("../Output/Ne/PWSonly_AF.csv", row.names = 1)
+pws25<-pws[pws$chr=="chr25",]
+{plot(pws25$pos[pws25$pos>=810000&pws25$pos<=830000],pws25$F0[pws25$pos>=810000&pws25$pos<=830000],pch=16, col="yellow", xlab="position", ylab="AF" )
+points(pws25$pos[pws25$pos>=810000&pws25$pos<=830000],pws25$F1[pws25$pos>=810000&pws25$pos<=830000],pch=16, col="orange")
+points(pws25$pos[pws25$pos>=810000&pws25$pos<=830000],pws25$F2[pws25$pos>=810000&pws25$pos<=830000],pch=16, col="red")
+points(pws25$pos[pws25$pos>=810000&pws25$pos<=830000],pws25$F3[pws25$pos>=810000&pws25$pos<=830000],pch=16, col="brown")}
+```
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#Fst between PWS and SS
+
+pw1<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_folded_PWS96_SS96_50kWindow_maf00"))
+conames<-colnames(pw1)[2:4]
+colnames(pw1)[4]<-"Fst"
+colnames(pw1)[1:3]<-conames
+pw1$pop<-paste0("PWS96.vs.SS96")
+pw1$ch=as.integer(gsub("chr","", pw1$chr))
+pw1<-pw1[order(pw1$ch),]
+
+mean(pw1$Fst) #0.00613629
+
+
+pw2<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_folded_PWS07_SS06_50kWindow_maf00"))
+conames<-colnames(pw2)[2:4]
+colnames(pw2)[4]<-"Fst"
+colnames(pw2)[1:3]<-conames
+pw2$pop<-paste0("PWS07.vs.SS06")
+pw2$ch=as.integer(gsub("chr","", pw2$chr))
+pw2<-pw2[order(pw2$ch),]
+
+mean(pw2$Fst) #0.01455121
+
+
+pw3<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_folded_PWS17_SS17_50kWindow_maf00"))
+conames<-colnames(pw3)[2:4]
+colnames(pw3)[4]<-"Fst"
+colnames(pw3)[1:3]<-conames
+pw3$pop<-paste0("PWS17.vs.SS17")
+pw3$ch=as.integer(gsub("chr","", pw3$chr))
+pw3<-pw3[order(pw3$ch),]
+
+mean(pw3$Fst) #0.008753204
+
+
+
+
+pwfst<-rbind(pw1, pw2, pw3)
+pairs<-c("PWS96.vs.SS96","PWS07.vs.SS06","PWS17.vs.SS17")
+
+# Plot mean Fst of each chromosomes
+Fst<-data.frame()
+for (i in 1:3){
+    df<-pwfst[pwfst$pop==pairs[i],]
+    fs<-data.frame(chr=1:26)
+    for (j in 1:26){
+        fs$mean[j]<-mean(df$Fst[df$chr==paste0("chr",j)])
+    }
+    fs$pop<-pairs[i]
+    Fst<-rbind(Fst, fs)
+}
+
+ggplot(Fst, aes(x=chr, y=mean, color=pop))+
+    geom_point()+
+    geom_path(stat="identity")+
+    theme_minimal()+ylab("Fst")+
+    scale_x_continuous(breaks=1:26, labels = 1:26)+
+    theme(legend.title = element_blank(), panel.grid.minor.x = element_blank())
+ggsave("../Output/SFS/Fst_PWS.vs.SSbyChromosome_dotplot.png", width = 13, height=6.5, dpi=150)
+```
+![](../Output/SFS/Fst_PWS.vs.SSbyChromosome_dotplot.png)
+
+
+```{r}
+
+```
+

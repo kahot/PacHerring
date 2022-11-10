@@ -1,0 +1,235 @@
+---
+title: "Genes in Inversions (Chr7 and Chr12)"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(tidyverse)
+library(dplyr)
+library(cowplot)
+```
+
+
+# Extract the regions in Chr7 inversion 
+## 1. Create a bed file for regions of interest
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#Create bed files for regions of interest
+chrsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+
+sink("../Output/inversions/chr7_inv_region.bed")
+cat("track type=bedGraph \n")
+cat(paste0("chr7\t19500000\t25920000\n"))
+sink(NULL)
+
+sink("../Output/inversions/chr16_inv_region.bed")
+cat("track type=bedGraph \n")
+cat(paste0("chr16\t1\t3820000\n"))
+sink(NULL)
+
+sink("../Output/inversions/chr12_inv_region.bed")
+cat("track type=bedGraph \n")
+cat(paste0("chr12\t17000000\t25700000\n"))
+sink(NULL)
+
+```
+
+## Extract the target region using vcftools and create a new vcf file 
+
+```{bash}
+# 2. Create VCF files with the specified regions (using the bed files created above)
+
+cd ~/Projects/PacHerring/
+vcftools --gzvcf Data/new_vcf/PWSonly/PWSonly_NS0.5_maf01.vcf.gz --bed Output/inversions/chr7_inv_region.bed --out Output/inversions/PWS_chr7_invregion --recode --keep-INFO-all
+
+vcftools --gzvcf Data/new_vcf/PWSonly/PWSonly_NS0.5_maf01.vcf.gz --bed Output/inversions/chr16_inv_region.bed --out Output/inversions/PWS_chr16_invregion --recode --keep-INFO-all
+vcftools --gzvcf Data/new_vcf/PWSonly/PWSonly_NS0.5_maf01.vcf.gz --bed Output/inversions/chr12_inv_region.bed --out Output/inversions/PWS_chr12_invregion --recode --keep-INFO-all
+```
+
+## Create a script to run SnpEff 
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#create a bash script to run snpEff
+vfiles<-list.files("../Output/inversions/", pattern=".recode.vcf")
+
+sink("~/programs/snpEff/runsnpEff_inv.sh")
+cat("#!/bin/bash \n\n")
+for (i in 1:length(vfiles)){
+    fname<-gsub(".recode.vcf","",vfiles[i])
+    cat(paste0("java -Xmx8g -jar snpEff.jar Ch_v2.0.2.99 ~/Projects/PacHerring/Output/inversions/",vfiles[i], " -stats ~/Projects/PacHerring/Output/inversions/",fname,".html >  ~/Projects/PacHerring/Output/inversions/Anno.",fname,".vcf \n"))
+    
+    #extract the annotation information
+    cat(paste0("bcftools query -f '%CHROM %POS %INFO/AF %INFO/ANN\\n' ~/Projects/PacHerring/Output/inversions/Anno.",fname,".vcf > ~/Projects/PacHerring/Output/inversions/",fname,"_annotation \n\n"))
+
+}
+sink(NULL)  
+```
+
+Run snpEff in its directory
+```{bash eval=TRUE, include=FALSE}
+cd ~/programs/snpEff
+bash runsnpEff/sh
+```
+
+
+## Create summary files of snpEff results (gene annotations in the regions of interest) and reformat as a ShinyGo input 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#create gene list 
+gfiles<-list.files("../Output/inversions/", pattern="genes.txt")
+
+for (i in 1:length(gfiles)){
+    df<-read.table(paste0("../Output/inversions/",gfiles[i]), sep="\t")
+    df<-df[,1:7]
+    colnames(df)<-c("GeneName","GeneId","TranscriptId","BioType","variants_impact_HIGH","variants_impact_LOW",	"variants_impact_MODERATE")
+    
+    fname<-gsub(".genes.txt","",gfiles[i])
+    sink(paste0("../Output/inversions/geneIDlist_",fname,".txt"))
+    cat(paste0(df$GeneId,"; "))
+    sink(NULL)
+}
+
+### Convert to NCBI Gene ID using ensemble to use iPath
+# http://uswest.ensembl.org/biomart/martview/
+#how to video: 
+id_c4<-read.csv("../Output/PCA/genes/ch4_inv_mart_export.csv")
+id<-id_c4[!is.na(id_c4$NCBI.gene..formerly.Entrezgene..ID),]
+sink("../Output/PCA/genes/ch4_inv_geneIDs.txt")
+for (i in 1: nrow(id)){
+    cat(paste0("NCBI-GI:",id$NCBI.gene..formerly.Entrezgene..ID[i],"\n"))
+}
+sink(NULL)
+
+id<-read.csv("../Output/PCA/genes/chr15_region_mart_export.txt")
+id<-id[!is.na(id$NCBI.gene..formerly.Entrezgene..ID),]
+sink("../Output/PCA/genes/ch15_region_geneIDs.txt")
+for (i in 1: nrow(id)){
+    cat(paste0("NCBI-GI:",id$NCBI.gene..formerly.Entrezgene..ID[i],"\n"))
+}
+sink(NULL)
+
+```
+
+
+* Background genes for annotation
+```{r}
+#create the background gene data for the annotation purpose
+df<-read.table("../Data/new_vcf/PWSonly/PWSonly_background.genes.txt", sep="\t")
+df<-df[,1:3]
+colnames(df)<-c("GeneName","GeneId","TranscriptId")
+sink(paste0("../Data/new_vcf/PWSonly/PWSonly_background_geneIDlist.txt"))
+cat(paste0(df$GeneId,"; "))
+sink(NULL)
+```
+
+
+<br>
+
+# Results from ShinyGO annotation
+## Chr4 [23.7Mb-end] region
+
+![](../Output/PCA/genes/ShinyGO.0.76/ch4/barplot.png){width=70%}
+
+## Chr8 [23Mb-end] region
+
+![](../Output/PCA/genes/ShinyGO.0.76/ch8/barplot.png){width=70%}
+
+## Chr15 [0-16.5Mb] region
+
+![](../Output/PCA/genes/ShinyGO.0.76/ch15/barplot.png){width=70%}
+
+## Chr20 [21.6Mb-end] region
+
+![](../Output/PCA/genes/ShinyGO.0.76/ch20_end/barplot.png){width=70%}
+
+## Chr20 [1.5-3.7Mb] inversion region
+![](../Output/PCA/genes/ShinyGO.0.76/ch20_inv/barplot-2.png){width=80%}
+
+
+
+
+
+
+## Genes in the region:
+```{r}
+df<-read.table(paste0("../Output/PCA/genes/PWS_chr20_region_annotation"), header = F)
+annotations<-data.frame()
+    for (j in 1: nrow(df)){
+        anns<-unlist(strsplit(df$V4[j], "\\|"))
+        anns<-anns[c(2,3,4,5,8,17,18,19,20,23)]
+        annotations<-rbind(annotations, anns)
+    }     
+annotations<-cbind(df[,1:2], annotations)
+colnames(annotations)<-c("chr", "pos", "Annotation","Putative_impact","Gene_name", "Gene_ID", "Transcript_biotype","Annotation2","Putative_impact2","Gene_name2", "Gene_ID2", "Transcript_biotype2")
+
+
+ano<-annotations[!(duplicated(annotations[,3:6])),]
+focus<-ano[ano$pos>=26425000& ano$pos<=26490000,]
+write.csv(focus, "../Output/PCA/genes/Chr20_genes_in_26.4-26.6M.csv")
+library(knitr)
+kable(focus, caption = "Genes in the focal region")
+```
+
+<br>
+<br>
+
+# Find genes in high Fst regions between years in PWS
+## From the Null model 
+```{r}
+
+outliers<-read.csv("../Output/Fst/Fst_nullshuffling_outliers_PWS.csv", row.names = 1)
+#create a bed files
+sink("../Output/Fst/Fst_outlier_chr25_region.bed")
+cat("track type=bedGraph \n")
+cat(paste0("chr19\t", outliers$midPos[outliers$CHROM=="chr19"]-25000, "\t", outliers$midPos[outliers$CHROM=="chr19"]+25000 ,"\n"))
+cat(paste0("chr25\t", 805000-25000,"\t",845000+250,"\n"))
+sink(NULL)
+```
+
+```{bash}
+cd ~/Projects/PacHerring/
+vcftools --gzvcf Data/new_vcf/PWSonly/PWSonly_NS0.5_maf01.vcf.gz --bed Output/Fst/Fst_outlier_chr25_region.bed --out Output/Fst/Fst_outlier_chr25_region --recode --keep-INFO-all
+
+#Run snpEff in its directory
+cd ~/projects/snpEff/
+java -Xmx8g -jar snpEff.jar Ch_v2.0.2.99 ~/Projects/PacHerring/Output/Fst/Fst_outlier_chr25_region.recode.vcf -stats ~/Projects/PacHerring/Output/Fst/Fst_outlier_region.recode.vcf.html >  ~/Projects/PacHerring/Output/Fst/Fst_outlier_anno_region.recode.vcf
+
+bcftools query -f '%CHROM %POS %INFO/AF %INFO/ANN\n' ~/Projects/PacHerring/Output/Fst/Fst_outlier_anno_region.recode.vcf > ~/Projects/PacHerring/Output/Fst/Fst_outlier_regoin_PWS_annotation 
+
+```
+
+```{r}
+re<-read.table("../Output/Fst/Fst_outlier_regoin_PWS_annotation")
+annotations<-data.frame()
+for (i in 1: nrow(re)){
+    anns<-unlist(strsplit(re$V4[i], "\\|"))
+    anns<-anns[c(2,3,4,8)]
+    annotations<-rbind(annotations, anns)
+}      
+re<-cbind(re[,1:3], annotations)
+colnames(re)<-c("chr","pos","AF","type","impact","gene name","protein coding")
+
+knitr::kable(re)
+```
+
+* mylipa: myosin regulatory light chain interacting protein a
+https://zfin.org/ZDB-GENE-030131-7831#gene-ontology
+"Predicted to have ubiquitin-protein transferase activity. Involved in gastrulation and negative regulation of Wnt signaling pathway. Localizes to cytoplasm. Is expressed in several structures, including axis; midbrain; neural plate; polster; and retina. Orthologous to human MYLIP (myosin regulatory light chain interacting protein)."
+Expresssed upto juveniles
+
+```{bash}
+
+```
+
+
+
+
+
+

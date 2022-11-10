@@ -1,0 +1,238 @@
+---
+title: "Selection scan (Fst outliers) between years"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(stringr)
+library(gridExtra)
+library(RcppCNPy)
+
+```
+
+# PCAngsd Selection Scan
+* Genome-wide Fst scan between years of PWS pop using PCAngsd   
+
+## Run PCAngsd selection on Pairwise comparison
+* Can be run for multiple populations  
+
+```{bash}
+python /home/jamcgirr/apps/pcangsd/pcangsd.py -beagle /home/ktist/ph/data/new_vcf/MD7000/beagle/subpop/PWS91.PWS96_maf05_BEAGLE.PL.gz -o /home/ktist/ph/data/angsd/selection/PWS91.PWS96_selection -selection -sites_save 
+
+# scripts to run at Fram: pcangsd_selection.sh 
+# run pcansgd_selectionPWS.sh for aggregated PWS pop over years
+
+```
+
+## Results
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+cols<-c("#0072b2","#cc79a7","#009e73","#d55e00","#56b4e9","#e69f00","#f0e442")
+
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pop_info<-pop_info[,c("Sample","pop","Year.Collected")]
+colnames(pop_info)[3]<-"year"
+
+#Based on the tutorial http://www.popgen.dk/software/index.php/PCAngsdTutorial
+
+## function for QQplot
+qqchi<-function(x,...){
+    lambda<-round(median(x)/qchisq(0.5,1),2)
+    qqplot(qchisq((1:length(x)-0.5)/(length(x)),1),x,ylab="Observed",xlab="Expected",...);abline(0,1,col=2,lwd=2)
+    legend("topleft",paste("lambda=",lambda))
+}
+
+########  PWS pairwise run ###
+pwapops<-c("PWS91" ,"PWS96","PWS07", "PWS17")
+comb<-combn(pwapops, 2)
+comb<-t(comb)
+comb1<-comb[c(1,4,6,3),]
+
+for (i in 1:nrow(comb1)){
+    pop1<-comb1[i,1]
+    pop2<-comb1[i,2]
+    
+    #s<-npyLoad(paste0("Data/PCAangsd/selection/",pop1,".",pop2,"_selection.selection.npy"))
+    s<-npyLoad(paste0("../Data/PCAangsd/selection/pruned_",pop1,".",pop2,"_selection.selection.npy"))
+    
+    #how many PC axes were evaluated?
+    nc<-ncol(s)
+    
+    ## make QQ plot to QC the test statistics
+    #qqchi(s)
+    
+    # convert test statistic to p-value
+    if (nc==1) pval<-1-pchisq(s,1)
+    if (nc>1) {
+        p$pval1<-pval[,1]
+        p$pval2<-pval[,2]
+        p$loc<-1:nrow(p)
+        p$pval1.log<--log10(p$pval1)
+        p$pval2.log<--log10(p$pval2)
+        }
+    
+    #read the position info    
+    p<-read.table(paste0("../Data/PCAangsd/selection/pruned_",pop1,".",pop2,"_selection.sites"),colC=c("factor","integer"),sep=":")
+    names(p)<-c("chr","pos")
+    
+    ## make manhatten plot
+    p$pval<-pval
+    p$loc<-1:nrow(p)
+    p$pval.log<--log10(p$pval)
+    
+    write.csv(p, paste0("../Output/PCA/selection/Fst_pval_Pruned", pop1,".",pop2,".csv"))
+    write.csv(p[p$pval.log>4,], paste0("../Output/PCA/selection/Selected_highP_sites_Pruned", pop1,".",pop2,".csv"))
+    
+    ch<-unique(p$chr)
+    
+    #count the number of sites per chromosomes
+    poss<-data.frame(chr=ch)
+    k=1
+    for (i in 1:nrow(poss)){
+        df<-p[p$chr==poss$chr[i],]
+        poss$start[i]<-k
+        poss$end[i]<-k+nrow(df)-1
+        k=k+nrow(df)
+    }
+    
+    poss$x<-poss$start+(poss$end-poss$start)/2
+    
+    #color vectors
+    colors<-rep(c("steelblue","lightblue"), times=13)
+    p$chr<-factor(p$chr, levels=poss$chr)
+    ggplot(data=p, aes(x=loc, y=pval.log, color=chr))+
+        geom_point(size=0.15)+
+        scale_color_manual(values=colors, guide='none')+
+        scale_x_continuous(name="Chromosome", breaks=poss$x, labels=gsub("chr",'',poss$chr))+
+        theme_classic()+ylab("-log10(p-value)")+
+        ggtitle(paste0(pop1," vs. ",pop2))
+    ggsave(paste0("../Output/PCA/selection/pcangsd_selection_",pop1,"_",pop2,"_plot.png"), width = 6, height = 3, dpi = 300)    
+}
+
+```
+![](../Output/PCA/selection/pcangsd_selection_PWS91_PWS96_plot.png)
+![](../Output/PCA/selection/pcangsd_selection_PWS96_PWS07_plot.png)  
+![](../Output/PCA/selection/pcangsd_selection_PWS07_PWS17_plot.png)
+![](../Output/PCA/selection/pcangsd_selection_PWS91_PWS17_plot.png)
+
+## PCAnsgd for all years of PWS  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+## PWS together
+s<-npyLoad("../Data/PCAangsd/selection/PWS_selection.selection.npy")
+
+## make QQ plot to QC the test statistics
+#qqchi(s)
+# convert test statistic to p-value
+pval<-1-pchisq(s,1)
+
+## read positions 
+p<-read.table("../Data/PCAangsd/selection/PWS_selection.sites",colC=c("factor","integer"),sep=":")
+names(p)<-c("chr","pos")
+p$pval1<-pval[,1]
+p$loc<-1:nrow(p)
+p$pval1.log<--log10(p$pval1)
+
+#count the number of sites per chromosomes
+ch<-unique(p$chr)
+poss<-data.frame(chr=ch)
+k=1
+for (i in 1:nrow(poss)){
+    df<-p[p$chr==poss$chr[i],]
+    poss$start[i]<-k
+    poss$end[i]<-k+nrow(df)-1
+    k=k+nrow(df)
+}
+
+poss$x<-poss$start+(poss$end-poss$start)/2
+
+colors<-rep(c("steelblue","lightblue"), times=13)
+p$chr<-factor(p$chr, levels=poss$chr)
+
+ggplot(data=p, aes(x=loc, y=pval1.log, color=chr))+
+    geom_point(size=0.1)+
+    scale_color_manual(values=colors, guide='none')+
+    scale_x_continuous(name="Chromosome position", breaks=poss$x, labels=gsub("chr",'',poss$chr))+
+    theme_classic()+ylab("-log10(p-value)")+
+    ggtitle("PWS")
+ggsave("../Output/PCA/selection/PWS_pcangsd_selection.png", width = 12, height = 6, dpi=300)    
+```
+![](../Output/PCA/selection/PWS_pcangsd_selection.png)
+
+## High P-value loci from each pop pair
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#for each population pair
+pwapops<-c("PWS91" ,"PWS96","PWS07", "PWS17")
+comb<-combn(pwapops, 2)
+comb<-t(comb)
+comb1<-comb[c(1,4,6,3),]
+
+#create windows to be assigned for each site
+chr <- read.table('../Data/new_vcf/chr_sizes.bed')
+chr<-chr[,-2]
+colnames(chr)<-c("chr", "len")
+#chrmax$start<-c(0,cumsum(chrmax$len)[1:(nrow(chrmax)-1)])
+#setkey(chrmax, chr)
+
+winsz <- 50000 # window size
+# use seq to find the start points of each window
+windows<-data.frame()
+for (i in 1:nrow(chr)){
+    ch<-chr$len[chr$chr==paste0("chr",i)]
+    window_start <- seq(from = 1, to = ch-50000, by = winsz)
+    window_stop <- window_start + (winsz-1)
+    win <- data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + ((window_stop-window_start)/2-0.5))
+    win$chr<-paste0("chr",i)
+    win$ch<-i
+    windows<-rbind(windows, win)
+}
+setDT(windows)
+fstdat<-list()
+Fst<-data.frame()
+for (i in 1: nrow(comb1)){
+    pop1<-comb1[i,1]
+    pop2<-comb1[i,2]
+    df<-fread(paste0("../Output/PCA/selection/Selected_highP_sites_Pruned", pop1,".",pop2,".csv"))
+    df<-df[,-1]
+    #assign the window info
+    df<-windows[df, .(chr, pos, pval, pval.log, start, stop, mid), on=.(chr=chr, start <=pos, stop>=pos)]
+    #create a unique id for the window
+    df$win_id<-paste0(df$chr,"_",df$mid)
+    df$pops<-paste0(pop1,".",pop2)
+    fstdat[[i]]<-df
+    names(fstdat)[i]<-paste0(pop1,".",pop2)
+    Fst<-rbind(Fst, df)
+}
+
+#Find overlapping positions among pairs?
+lapply(fstdat, "[[", "win_id")
+
+Reduce(intersect, list(fstdat[[1]]$win_id , fstdat[[2]]$win_id))
+Reduce(intersect, list(fstdat[[2]]$win_id , fstdat[[3]]$win_id))
+Reduce(intersect, list(fstdat[[3]]$win_id , fstdat[[4]]$win_id))
+
+Fst$chr<-factor(Fst$chr, levels=paste0("chr",1:26))
+ggplot(Fst, aes(x=pos, y=pval.log, color=pops))+
+    geom_point()+
+    facet_wrap(~chr)+
+   theme_bw()+xlab("Genome position")+
+    ylab("-log10(P-val)")+theme(legend.title = element_blank(), axis.text.x = element_blank())
+ggsave("../Output/Fst/pcangsd_scan_highPsites.png", width=9, height=6, dpi=300)
+```
+![](../Output/Fst/pcangsd_scan_highPsites.png)
+
+
+
+<br>
+<br>
+
+

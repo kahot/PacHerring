@@ -1,0 +1,1097 @@
+---
+title: "EstimateNe"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: false
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+
+# Estimate effective population size (Ne) of PWS from allele frequncy chagnes 
+ 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+require(data.table)
+require(plyr)
+require(RColorBrewer)
+library(poolSeq)
+```
+
+## Nest/PoolSeq package is used. 
+Ref: doi: 10.1534/genetics.116.191197
+
+
+1. Subset VCF files by population  
+```{bash eval=FALSE, message=FALSE, warning=FALSE}
+#subset a VCF file by population (subset_vcf_byPopPWS.sh)
+
+#!/bin/bash
+#SBATCH --job-name=subsetPop
+#SBATCH --mem=16G 
+#SBATCH --nodes=4 
+#SBATCH --ntasks=8 
+#SBATCH -e subsetPop.err  
+#SBATCH --time=72:00:00  
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+
+#SBATCH -p high  
+
+module load bcftools
+
+bcftools view -Oz -S /home/ktist/ph/data/new_vcf/MD7000/population/PWS07.txt --threads 16 /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly07_maf05.vcf.gz 
+bcftools view -Oz -S /home/ktist/ph/data/new_vcf/MD7000/population/PWS17.txt --threads 16 /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly17_maf05.vcf.gz 
+bcftools view -Oz -S /home/ktist/ph/data/new_vcf/MD7000/population/PWS91.txt --threads 16 /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly91_maf05.vcf.gz 
+bcftools view -Oz -S /home/ktist/ph/data/new_vcf/MD7000/population/PWS96.txt --threads 16 /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly96_maf05.vcf.gz 
+
+```
+
+2. Calculate allele frequency using VCFtools  
+```{bash eval=FALSE, message=FALSE, warning=FALSE}
+#Calculate allele frequency using VCFtools (calculateAF_VCFtools.sh)
+
+#!/bin/bash -l
+#SBATCH --job-name=calculateAF
+#SBATCH --mem=16G
+#SBATCH --nodes=4 
+#SBATCH --ntasks=8 
+#SBATCH --error calculateAF.err
+#SBATCH --time=48:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high 
+
+module load vcftools
+
+vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly07_maf05.vcf.gz --freq --out /home/ktist/ph/data/new_vcf/MD7000/AF/PWSonly07_maf05_freq 
+vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly17_maf05.vcf.gz --freq --out /home/ktist/ph/data/new_vcf/MD7000/AF/PWSonly17_maf05_freq 
+vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly91_maf05.vcf.gz --freq --out /home/ktist/ph/data/new_vcf/MD7000/AF/PWSonly91_maf05_freq 
+vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly96_maf05.vcf.gz --freq --out /home/ktist/ph/data/new_vcf/MD7000/AF/PWSonly96_maf05_freq 
+```
+
+3. Obtain read depths from VCF files  
+```{bash eval=FALSE, message=FALSE, warning=FALSE}
+#Obtain depth information from VCF files (extract_coveragePWS.sh)
+
+#!/bin/bash
+#SBATCH --job-name=extract_coverage 
+#SBATCH --mem=16G 
+#SBATCH --ntasks=1 
+#SBATCH -e extract_coverage.err  
+#SBATCH --time=48:00:00  
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high  
+
+module load bcftools
+bcftools query -f '%CHROM  %POS  %INFO/DP\n' /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly07_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/depth/PWSonly07_maf05.depth.info 
+bcftools query -f '%CHROM  %POS  %INFO/DP\n' /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly17_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/depth/PWSonly17_maf05.depth.info 
+bcftools query -f '%CHROM  %POS  %INFO/DP\n' /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly91_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/depth/PWSonly91_maf05.depth.info 
+bcftools query -f '%CHROM  %POS  %INFO/DP\n' /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly96_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/depth/PWSonly96_maf05.depth.info 
+
+```
+
+## Use poolSeq to calcualte Ne 
+
+### 1. Read AF (frq) files and filter out extreme values and uninformative loci
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(poolSeq)
+
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+yr<-c(91,96,"07",17)
+#Read the allele freq data for PWS
+
+for (i in 1:length(pops)){
+    df<-read.table(paste0("../Data/new_vcf/AF/PWSonly",yr[i],"_maf05_freq.frq"),stringsAsFactors = FALSE,header = FALSE, skip=1, col.names = c("chr","pos","n_allele","n_sample","MajorAF","MAF"))
+    df$maf<-substr(df$MAF, 3,10)
+    df<-df[,c(1,2,7)]
+    df$maf<-as.numeric(df$maf)
+    assign(paste0("pws",i),df)
+}
+
+#combine AF for all years
+pws<-cbind(pws1, pws2[,3],pws3[,3],pws4[,3])
+colnames(pws)<-c("chr","pos","F0","F1","F2","F3")
+write.csv(pws, "../Output/Ne/PWSonly_AF.csv")
+
+#Read depth information
+for (i in 1:length(pops)){
+    df<-read.table(paste0("../Data/new_vcf/depth/PWSonly",yr[i],"_maf05.depth.info"), header=F)
+    colnames(df)<-c("chr","pos","depth")
+    assign(paste0("D",i),df)
+}
+#combine Depth for all years
+DP<-cbind(D1, D2[,3],D3[,3],D4[,3])
+colnames(DP)<-c("chr","pos","F0","F1","F2","F3")
+write.csv(DP,"../Output/Ne/PWSonly_read_depth.csv")
+
+#Find SNPs with extreme values and uninformative loci and remove them
+retain<-checkSNP(pws[,"F0"],pws[,"F3"],DP[,"F0"], DP[,"F3"])
+length(retain[retain==F]) #65317 will be removed
+
+#filtered the snp dataset
+pws_filtered<-pws[retain,]
+DP_filtered<-DP[retain,]
+
+#Look at F0 and F1
+retain1<-checkSNP(pws_filtered[,"F0"],pws_filtered[,"F1"],DP_filtered[,"F0"], DP_filtered[,"F1"])
+length(retain1[retain1==F]) #0
+
+retain2<-checkSNP(pws_filtered[,"F0"],pws_filtered[,"F2"],DP_filtered[,"F0"], DP_filtered[,"F2"])
+length(retain2[retain2==F]) #0
+
+retain3<-checkSNP(pws_filtered[,"F1"],pws_filtered[,"F2"],DP_filtered[,"F1"], DP_filtered[,"F2"])
+length(retain3[retain3==F]) #22479
+
+retain4<-checkSNP(pws_filtered[,"F2"],pws_filtered[,"F3"],DP_filtered[,"F2"], DP_filtered[,"F3"])
+length(retain4[retain4==F]) #34809
+
+```
+
+### 2. Run poolSeq to obtain short-term Ne values 
+PWS between 1991 and 2017  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+methods<-c("W.planI","W.planII","JR.planI","JR.planII","P.planI","P.planII","P.alt.1step.planII")
+
+#calcualte Ne for PWS91-PWS17 period 
+pws_Ne<-data.frame(methods=methods)
+for (i in 1: length(methods)){
+    pws_Ne$Ne[i]<-estimateNe(p0=pws_filtered[,"F0"], pt=pws_filtered[,"F3"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F3"], t=5, 
+                  method=methods[i], Ncensus=1000,poolSize=c(58,56))
+    pws_Ne$Ne_10000[i]<-estimateNe(p0=pws_filtered[,"F0"], pt=pws_filtered[,"F3"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F3"], t=5, 
+                                   method=methods[i], Ncensus=100000,poolSize=c(58,56))
+    
+}
+write.csv(pws_Ne,"../Output/Ne/Ne_estimation_PWSonly91-17_vcfAF.csv")
+#PlanI requires Ncensus, PlanII does not require Ncensus
+```
+
+
+```{r eval=TRUE}
+pws_Ne<-read.csv("../Output/Ne/Ne_estimation_PWSonly91-17_vcfAF.csv", row.names = 1)
+library(knitr)
+kable(pws_Ne, caption = "Estiamted Ne")
+
+```
+
+PlanI requires 'Ncensus',and PlanII does not require Ncensus. Ncensus =1000 [Ne] and 10000 Ne_10000.
+Does not make much difference after 10000
+
+### 3. Estimate Ne for each time point  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#further filtered the snp dataset
+pws_filtered<-pws_filtered[retain3,]
+DP_filtered<-DP_filtered[retain3,]
+retain4<-checkSNP(pws_filtered[,"F2"],pws_filtered[,"F3"],DP_filtered[,"F2"], DP_filtered[,"F3"])
+length(retain4[retain4==F])
+pws_filtered<-pws_filtered[retain4,]
+DP_filtered<-DP_filtered[retain4,]
+
+
+Ne<-data.frame(methods=methods)
+for (i in 1: length(methods)){
+    Ne$Ne01_t1[i]<-estimateNe(p0=pws_filtered[,"F0"], pt=pws_filtered[,"F1"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F1"], t=1, 
+                         method=methods[i], Ncensus=10000,poolSize=c(58,72))
+    Ne$Ne12_t2[i]<-estimateNe(p0=pws_filtered[,"F1"], pt=pws_filtered[,"F2"], cov0=DP_filtered[,"F1"], covt=DP_filtered[,"F2"], t=1.8, 
+                              method=methods[i], Ncensus=10000,poolSize=c(72,46))
+    Ne$Ne23_t2[i]<-estimateNe(p0=pws_filtered[,"F2"], pt=pws_filtered[,"F3"], cov0=DP_filtered[,"F2"], covt=DP_filtered[,"F3"], t=1.7, 
+                              method=methods[i], Ncensus=10000,poolSize=c(46,56))
+}
+
+write.csv(Ne, "../Output/Ne/Ne_estimation_PWSonly_eachTimePeriod_vcfAF.csv")
+Ne
+
+```
+
+
+### 4. Plot the results
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+colnames(Ne)[2:4]<-c("T1","T2","T3")
+nem<-reshape2::melt(Ne, id.vars="methods",value.name ="Ne")
+
+ggplot(nem, aes(x=variable, y=Ne, color=methods))+
+    geom_point()+
+    theme_classic()+ylab("Ne")+xlab("Time period")+
+    geom_path(aes(x=variable, y=Ne, group=methods,color=methods))+
+    theme(legend.title=element_blank())+ggtitle("PWS")
+ggsave("../Output/Ne/Ne_estimates_overtime_PWS.png", width = 6, height = 4, dpi=150)
+```
+![](../Output/Ne/Ne_estimates_overtime_PWS.png)  
+
+* Compare the results with PWSonly_maf0.05 vs. PWS_maf0.05 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+yr<-c(91,96,"07",17)
+for (i in 1:length(pops)){
+    df<-read.table(paste0("../Data/new_vcf/AF/PWS",yr[i],"_maf05_af.frq"),stringsAsFactors = FALSE,header = FALSE, skip=1, col.names = c("chr","pos","n_allele","n_sample","MajorAF","MAF"))
+    df$maf<-substr(df$MAF, 3,10)
+    df<-df[,c(1,2,7)]
+    df$maf<-as.numeric(df$maf)
+    assign(paste0("pws",i),df)
+}
+
+#combine AF for all years
+pws<-cbind(pws1, pws2[,3],pws3[,3],pws4[,3])
+colnames(pws)<-c("chr","pos","F0","F1","F2","F3")
+write.csv(pws, "../Output/Ne/PWS_AF.csv")
+
+#Read depth information
+for (i in 1:length(pops)){
+    df<-read.table(paste0("../Data/new_vcf/depth/PWS",yr[i],"_maf05.depth.info"), header=F)
+    colnames(df)<-c("chr","pos","depth")
+    assign(paste0("D",i),df)
+}
+#combine Depth for all years
+DP<-cbind(D1, D2[,3],D3[,3],D4[,3])
+colnames(DP)<-c("chr","pos","F0","F1","F2","F3")
+#write.csv(DP,"../Output/Ne/PWS_read_depth.csv")
+
+#Find SNPs with extreme values and uninformative loci and remove them
+retain<-checkSNP(pws[,"F0"],pws[,"F3"],DP[,"F0"], DP[,"F3"])
+length(retain[retain==F]) #65317 will be removed
+
+#filtered the snp dataset
+pws_filtered<-pws[retain,]
+DP_filtered<-DP[retain,]
+
+#Look at F0 and F1
+retain1<-checkSNP(pws_filtered[,"F0"],pws_filtered[,"F1"],DP_filtered[,"F0"], DP_filtered[,"F1"])
+length(retain1[retain1==F]) #0
+
+retain2<-checkSNP(pws_filtered[,"F0"],pws_filtered[,"F2"],DP_filtered[,"F0"], DP_filtered[,"F2"])
+length(retain2[retain2==F]) #0
+
+retain3<-checkSNP(pws_filtered[,"F1"],pws_filtered[,"F2"],DP_filtered[,"F1"], DP_filtered[,"F2"])
+length(retain3[retain3==F]) #5815
+
+retain4<-checkSNP(pws_filtered[,"F2"],pws_filtered[,"F3"],DP_filtered[,"F2"], DP_filtered[,"F3"])
+length(retain4[retain4==F]) #9857
+
+methods<-c("W.planI","W.planII","JR.planI","JR.planII","P.planI","P.planII","P.alt.1step.planII")
+
+#calcualte Ne for PWS91-PWS17 period 
+pws_Ne<-data.frame(methods=methods)
+for (i in 1: length(methods)){
+    pws_Ne$Ne[i]<-estimateNe(p0=pws_filtered[,"F0"], pt=pws_filtered[,"F3"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F3"], t=5, 
+                  method=methods[i], Ncensus=1000,poolSize=c(58,56))
+    pws_Ne$Ne_10000[i]<-estimateNe(p0=pws_filtered[,"F0"], pt=pws_filtered[,"F3"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F3"], t=5, 
+                                   method=methods[i], Ncensus=100000,poolSize=c(58,56))
+    
+}
+```
+
+```{r}
+library(knitr)
+pws_Ne<-
+kable(pws_Ne, caption = "Estiamted Ne")
+```
+
+
+```{r eval=FALSE, warning=FALSE}
+#further filtered the snp dataset
+pws_filtered<-pws_filtered[retain3,]
+DP_filtered<-DP_filtered[retain3,]
+retain4<-checkSNP(pws_filtered[,"F2"],pws_filtered[,"F3"],DP_filtered[,"F2"], DP_filtered[,"F3"])
+pws_filtered<-pws_filtered[retain4,]
+DP_filtered<-DP_filtered[retain4,]
+
+Ne<-data.frame(methods=methods)
+for (i in 1: length(methods)){
+    Ne$Ne01_t1[i]<-estimateNe(p0=pws_filtered[,"F0"], pt=pws_filtered[,"F1"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F1"], t=1, 
+                         method=methods[i], Ncensus=10000,poolSize=c(58,72))
+    Ne$Ne12_t2[i]<-estimateNe(p0=pws_filtered[,"F1"], pt=pws_filtered[,"F2"], cov0=DP_filtered[,"F1"], covt=DP_filtered[,"F2"], t=1.8, 
+                              method=methods[i], Ncensus=10000,poolSize=c(72,46))
+    Ne$Ne23_t2[i]<-estimateNe(p0=pws_filtered[,"F2"], pt=pws_filtered[,"F3"], cov0=DP_filtered[,"F2"], covt=DP_filtered[,"F3"], t=1.7, 
+                              method=methods[i], Ncensus=10000,poolSize=c(46,56))
+}
+write.csv(Ne, "../Output/Ne/Ne_estimation_PWS_eachTimePeriod_vcfAF.csv")
+Ne
+
+colnames(Ne)[2:4]<-c("T1","T2","T3")
+nem<-reshape2::melt(Ne, id.vars="methods",value.name ="Ne")
+
+ggplot(nem, aes(x=variable, y=Ne, color=methods))+
+    geom_point()+
+    theme_classic()+ylab("Ne")+xlab("Time period")+
+    geom_path(aes(x=variable, y=Ne, group=methods,color=methods))+
+    theme(legend.title=element_blank())
+ggsave("../Output/Ne/Ne_estimates_overtime_PWS_nonPWSonly.png", width = 6, height = 4, dpi=150)
+
+```
+![](../Output/Ne/Ne_estimates_overtime_PWS_nonPWSonly.png)
+
+* Highly similar -can use PH_maf05 data
+
+### 5. Calculate TB and SS Ne  
+
+- 1. TB
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+size<-read.csv("../Data/popinfo/popsize.csv")
+pops<-c("TB91","TB96","TB06","TB17")
+for (i in 1:length(pops)){
+    df<-read.table(paste0("../Data/new_vcf/AF/",pops[i],"_maf05_af.frq"),stringsAsFactors = FALSE,header = FALSE, skip=1, col.names = c("chr","pos","n_allele","n_sample","MajorAF","MAF"))
+    df$maf<-substr(df$MAF, 3,10)
+    df<-df[,c(1,2,7)]
+    df$maf<-as.numeric(df$maf)
+    assign(paste0("AF",i),df)
+}
+
+#combine AF for all years
+AF<-cbind(AF1, AF2[,3],AF3[,3],AF4[,3])
+colnames(AF)<-c("chr","pos","F0","F1","F2","F3")
+write.csv(AF, "../Output/Ne/TB_maf05_AF.csv")
+
+#Read depth information
+for (i in 1:length(pops)){
+    df<-read.table(paste0("../Data/new_vcf/depth/",pops[i],"_maf05.depth.info"), header=F)
+    colnames(df)<-c("chr","pos","depth")
+    assign(paste0("D",i),df)
+}
+#combine Depth for all years
+DP<-cbind(D1, D2[,3],D3[,3],D4[,3])
+colnames(DP)<-c("chr","pos","F0","F1","F2","F3")
+write.csv(DP,"../Output/Ne/TB_maf05_read_depth.csv")
+
+#Find SNPs with extreme values and uninformative loci and remove them
+retain<-checkSNP(AF[,"F0"],AF[,"F3"],DP[,"F0"], DP[,"F3"])
+length(retain[retain==F]) #69743
+AF_filtered<-AF[retain,]
+DP_filtered<-DP[retain,]
+
+#Look at F0 and F1
+retain1<-checkSNP(AF_filtered[,"F0"],AF_filtered[,"F1"],DP_filtered[,"F0"], DP_filtered[,"F1"])
+length(retain1[retain1==F]) #0
+
+retain2<-checkSNP(AF_filtered[,"F0"],AF_filtered[,"F2"],DP_filtered[,"F0"], DP_filtered[,"F2"])
+length(retain2[retain2==F]) #0
+
+retain3<-checkSNP(AF_filtered[,"F1"],AF_filtered[,"F2"],DP_filtered[,"F1"], DP_filtered[,"F2"])
+length(retain3[retain3==F]) #22479
+
+retain4<-checkSNP(AF_filtered[,"F2"],AF_filtered[,"F3"],DP_filtered[,"F2"], DP_filtered[,"F3"])
+length(retain[retain==F]) 
+
+methods<-c("W.planI","W.planII","JR.planI","JR.planII","P.planI","P.planII","P.alt.1step.planII")
+
+#calcualte Ne for 1991-2017 period 
+AF_Ne<-data.frame(methods=methods)
+for (i in 1: length(methods)){
+    AF_Ne$Ne[i]<-estimateNe(p0=AF_filtered[,"F0"], pt=AF_filtered[,"F3"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F3"], t=5, 
+                  method=methods[i], Ncensus=1000,poolSize=c(size$Freq[size$pop==pops[1]],size$Freq[size$pop==pops[4]] ))
+    AF_Ne$Ne_10000[i]<-estimateNe(p0=AF_filtered[,"F0"], pt=AF_filtered[,"F3"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F3"], t=5, 
+                                   method=methods[i], Ncensus=100000,poolSize= c(size$Freq[size$pop==pops[1]], size$Freq[size$pop==pops[4]]))
+    
+}
+write.csv(AF_Ne,"../Output/Ne/Ne_estimation_TB91-17_vcfAF.csv")
+
+knitr::kable(AF_Ne, caption = "Estiamted Ne of TB")
+
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Estimate Ne for each time point  
+AF_filtered<-AF_filtered[retain3,]
+DP_filtered<-DP_filtered[retain3,]
+AF_filtered<-AF_filtered[retain4,]
+DP_filtered<-DP_filtered[retain4,]
+
+Ne<-data.frame(methods=methods)
+for (i in 1: length(methods)){
+    Ne$Ne01_t1[i]<-estimateNe(p0=AF_filtered[,"F0"], pt=AF_filtered[,"F1"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F1"], t=1, 
+                         method=methods[i], Ncensus=10000,poolSize=c(size$Freq[size$pop==pops[1]],size$Freq[size$pop==pops[2]]))
+    Ne$Ne12_t2[i]<-estimateNe(p0=AF_filtered[,"F1"], pt=AF_filtered[,"F2"], cov0=DP_filtered[,"F1"], covt=DP_filtered[,"F2"], t=1.8, 
+                              method=methods[i], Ncensus=10000,poolSize=c(size$Freq[size$pop==pops[2]],size$Freq[size$pop==pops[3]]))
+    Ne$Ne23_t2[i]<-estimateNe(p0=AF_filtered[,"F2"], pt=AF_filtered[,"F3"], cov0=DP_filtered[,"F2"], covt=DP_filtered[,"F3"], t=1.7, 
+                              method=methods[i], Ncensus=10000,poolSize=c(size$Freq[size$pop==pops[3]],size$Freq[size$pop==pops[4]]))
+}
+
+write.csv(Ne, "../Output/Ne/Ne_estimation_TB_eachTimePeriod_vcfAF.csv")
+
+colnames(Ne)[2:4]<-c("T1","T2","T3")
+nem<-reshape2::melt(Ne, id.vars="methods",value.name ="Ne")
+
+ggplot(nem, aes(x=variable, y=Ne, color=methods))+
+    geom_point()+
+    theme_classic()+ylab("Ne")+xlab("Time period")+
+    geom_path(aes(x=variable, y=Ne, group=methods,color=methods))+
+    theme(legend.title=element_blank())+ggtitle("TB")
+ggsave("../Output/Ne/Ne_estimates_overtime_TB.png", width = 6, height = 4, dpi=150)
+```
+![](../Output/Ne/Ne_estimates_overtime_TB.png)
+
+- 2. SS  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pops<-c("SS96","SS06","SS17")
+for (i in 1:length(pops)){
+    df<-read.table(paste0("../Data/new_vcf/AF/",pops[i],"_maf05_af.frq"),stringsAsFactors = FALSE,header = FALSE, skip=1, col.names = c("chr","pos","n_allele","n_sample","MajorAF","MAF"))
+    df$maf<-substr(df$MAF, 3,10)
+    df<-df[,c(1,2,7)]
+    df$maf<-as.numeric(df$maf)
+    assign(paste0("AF",i),df)
+}
+#combine AF for all years
+AF<-cbind(AF1, AF2[,3],AF3[,3])
+colnames(AF)<-c("chr","pos","F0","F1","F2")
+write.csv(AF, "../Output/Ne/SS_maf05_AF.csv")
+
+#Read depth information
+for (i in 1:length(pops)){
+    df<-read.table(paste0("../Data/new_vcf/depth/",pops[i],"_maf05.depth.info"), header=F)
+    colnames(df)<-c("chr","pos","depth")
+    assign(paste0("D",i),df)
+}
+#combine Depth for all years
+DP<-cbind(D1, D2[,3],D3[,3])
+colnames(DP)<-c("chr","pos","F0","F1","F2")
+write.csv(DP,"../Output/Ne/SS_maf05_read_depth.csv")
+
+#Find SNPs with extreme values and uninformative loci and remove them
+retain<-checkSNP(AF[,"F0"],AF[,"F2"],DP[,"F0"], DP[,"F2"])
+length(retain[retain==F]) #10509
+AF_filtered<-AF[retain,]
+DP_filtered<-DP[retain,]
+
+#Look at F0 and F1
+retain1<-checkSNP(AF_filtered[,"F0"],AF_filtered[,"F1"],DP_filtered[,"F0"], DP_filtered[,"F1"])
+length(retain1[retain1==F]) #0
+
+retain2<-checkSNP(AF_filtered[,"F0"],AF_filtered[,"F2"],DP_filtered[,"F0"], DP_filtered[,"F2"])
+length(retain2[retain2==F]) #0
+
+retain3<-checkSNP(AF_filtered[,"F1"],AF_filtered[,"F2"],DP_filtered[,"F1"], DP_filtered[,"F2"])
+length(retain3[retain3==F]) #26551
+
+methods<-c("W.planI","W.planII","JR.planI","JR.planII","P.planI","P.planII","P.alt.1step.planII")
+#calcualte Ne for 1991-2017 period 
+AF_Ne<-data.frame(methods=methods)
+for (i in 1: length(methods)){
+    AF_Ne$Ne[i]<-estimateNe(p0=AF_filtered[,"F0"], pt=AF_filtered[,"F2"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F2"], t=5, 
+                  method=methods[i], Ncensus=1000,poolSize=c(size$Freq[size$pop==pops[1]],size$Freq[size$pop==pops[3]]))
+    AF_Ne$Ne_10000[i]<-estimateNe(p0=AF_filtered[,"F0"], pt=AF_filtered[,"F2"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F2"], t=5, 
+                                   method=methods[i], Ncensus=100000,poolSize= c(size$Freq[size$pop==pops[1]],size$Freq[size$pop==pops[3]]))
+    
+}
+write.csv(AF_Ne,"../Output/Ne/Ne_estimation_SS96-17_vcfAF.csv")
+
+knitr::kable(AF_Ne, caption = "Estiamted Ne of SS")
+
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Estimate Ne for each time point  
+AF_filtered<-AF_filtered[retain3,]
+DP_filtered<-DP_filtered[retain3,]
+Ne<-data.frame(methods=methods)
+for (i in 1: length(methods)){
+    Ne$Ne01_t1[i]<-estimateNe(p0=AF_filtered[,"F0"], pt=AF_filtered[,"F1"], cov0=DP_filtered[,"F0"], covt=DP_filtered[,"F1"], t=1, 
+                         method=methods[i], Ncensus=10000,poolSize=c(size$Freq[size$pop==pops[1]],size$Freq[size$pop==pops[2]]))
+    Ne$Ne12_t2[i]<-estimateNe(p0=AF_filtered[,"F1"], pt=AF_filtered[,"F2"], cov0=DP_filtered[,"F1"], covt=DP_filtered[,"F2"], t=1.8, 
+                              method=methods[i], Ncensus=10000,poolSize=c(size$Freq[size$pop==pops[2]],size$Freq[size$pop==pops[3]]))
+}
+
+write.csv(Ne, "../Output/Ne/Ne_estimation_SS_eachTimePeriod_vcfAF.csv")
+
+colnames(Ne)[2:3]<-c("T1","T2")
+nem<-reshape2::melt(Ne, id.vars="methods",value.name ="Ne")
+
+ggplot(nem, aes(x=variable, y=Ne, color=methods))+
+    geom_point()+
+    theme_classic()+ylab("Ne")+xlab("Time period")+
+    geom_path(aes(x=variable, y=Ne, group=methods,color=methods))+
+    theme(legend.title=element_blank())+ggtitle("SS")
+ggsave("../Output/Ne/Ne_estimates_overtime_SS.png", width = 6, height = 4, dpi=150)
+```
+![](../Output/Ne/Ne_estimates_overtime_SS.png)
+
+### Plot together the P.PlanII results
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Plot together (results from maf0.05 freq files)
+library(tibble)
+pops<-c("PWS","TB","SS")
+Ne<-data.frame()
+for (i in 1: length(pops)){
+    df<-read.csv(paste0("../Output/Ne/Ne_estimation_",pops[i],"_eachTimePeriod_vcfAF.csv"), row.names = 1)
+    df$pop<-pops[i]  
+    if (i==3) {
+        colnames(df)[2:3]<-c("T2","T3")
+        df<-add_column(df, T1=NA, .after=1)
+    }
+    if (i!=3) colnames(df)[2:4]<-c("T1","T2","T3")
+        
+    Ne<-rbind(Ne, df[df$methods=="P.planII",])
+}
+
+Nem<-reshape2::melt(Ne[,2:5], id.vars="pop")
+
+Nem$pop<-factor(Nem$pop, levels=c("TB","PWS","SS"))
+ggplot(Nem, aes(x=variable, y=value, color=pop))+
+    geom_point(size=2)+
+    theme_classic()+ylab("Ne")+xlab("Time period")+
+    geom_path(aes(x=variable, y=value, group=pop,color=pop))+
+    theme(legend.title=element_blank())+
+    scale_color_manual(values=cols)
+ggsave("../Output/Ne/Ne_estimates_overtime_3pops.png", width = 6, height = 4, dpi=150)
+```
+
+![](../Output/Ne/Ne_estimates_overtime_3pops.png)
+
+
+
+## Use the Jorde-Ryman temporal method from NeEstimator 2.1.
+
+From https://github.com/pinskylab/codEvol calcNe_ANGSD.r 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+require(data.table)
+require(boot)
+source("../Rscripts/calcNe.R")
+```
+
+### 1. Read the mafs data from ANGSD & trim positions to unlinked loci
+Starting with PWS pop  
+```{r eval=FALSE}
+#MAF data
+dat91<-fread("../Data/new_vcf/AF/PWS91.mafs.gz")
+dat96<-fread("../Data/new_vcf/AF/PWS96.mafs.gz")
+dat07<-fread("../Data/new_vcf/AF/PWS07.mafs.gz")
+dat17<-fread("../Data/new_vcf/AF/PWS17.mafs.gz")
+setkey(dat91, chromo, position)
+setkey(dat96, chromo, position)
+setkey(dat07, chromo, position)
+setkey(dat17, chromo, position)
+
+# unlinked loci from plink
+unlnk<-fread('../Data/plink/prune/prune_50.5.0.5.prune.in')
+setnames(unlnk, c("chromo","position"))
+
+dat91<-merge(dat91, unlnk)
+dat96<-merge(dat96, unlnk)
+dat07<-merge(dat07, unlnk)
+dat17<-merge(dat17, unlnk)
+
+```
+
+### 2. Combine two populations and trim loci with freq > 0.1  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+years<-c("91","96","07","17")
+comb<-t(combn(years, 2))
+
+estNe<-data.frame(pop1=comb[,1], pop2=comb[,2])
+gens<-c(1,2.67,4.33,1.83,3.5,1.67)
+
+for (i in 5: nrow(comb)){
+    df1<-get(paste0("dat",comb[i,1]))
+    df2<-get(paste0("dat",comb[i,2]))
+    
+    setnames(df1, c("knownEM", 'nInd'), c("freq1", 'nInd1'))
+    setnames(df2, c("knownEM", 'nInd'), c("freq2", 'nInd2'))
+    
+    df <- df1[df2, .(chromo, position, freq1, freq2, nInd1, nInd2)][!is.na(freq1) & !is.na(freq2) & freq1 > 0.1 & freq2 > 0.1, ]
+    g=gens[i]
+    
+    estNe$Ne[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g)] 
+
+    # block bootstrapping across LGs
+    uq.ch <- df[, sort(unique(chromo))]
+
+    boot.re <- boot(uq.ch, jrNe2block, 1000, gen = g, alldata = df)
+    estNe$median[i]<-median(boot.re$t[is.finite(boot.re$t)]) # median bootstrap
+    estNe$mean[i]<-mean(boot.re$t[is.finite(boot.re$t)])
+    ci<-boot.ci(boot.re, type = c('perc'))
+    #95% C.I.
+    estNe$CI.low[i]<-ci$percent[4]
+    estNe$CI.up[i]<-ci$percent[5]
+    
+    #reset the attibutes
+    setnames(df1, c("freq1", 'nInd1'),c("knownEM", 'nInd'))
+    setnames(df2, c("freq2", 'nInd2'),c("knownEM", 'nInd'))
+}
+
+write.csv(estNe,"../Output/Ne/Jorde-Ryman_Ne.estimates_PWS.csv")
+
+#estNe<-read.csv("../Output/Ne/Jorde-Ryman_Ne.estimates_PWS.csv", row.names = 1)
+estNe$year<-apply(estNe["pop2"],1, function(x) {if (x=="96") x=1996
+                   else if (x=="07") x=2007
+                   else if (x=="17") x=2017})
+
+ggplot(estNe[c(1,4,6),], aes(x=year, y=Ne))+
+    geom_point(size=2, color="blue")+
+    geom_errorbar(aes(ymin = CI.low, ymax = CI.up), width = 0.2, color="blue")+
+    geom_path(color="blue")+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+ggtitle("PWS")
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates.png", width = 5, height = 3, dpi=300)
+
+
+```
+
+```{r}
+knitr::kable(estNe)
+```
+
+
+![](../Output/Ne/Jorde-Ryman_Ne.estimates.png){width=60%}
+
+* TB pop  
+
+```{r eval=FALSE}
+#MAF data
+dat91<-fread("../Data/new_vcf/AF/TB91.mafs.gz")
+dat96<-fread("../Data/new_vcf/AF/TB96.mafs.gz")
+dat06<-fread("../Data/new_vcf/AF/TB06.mafs.gz")
+dat17<-fread("../Data/new_vcf/AF/TB17.mafs.gz")
+setkey(dat91, chromo, position)
+setkey(dat96, chromo, position)
+setkey(dat06, chromo, position)
+setkey(dat17, chromo, position)
+
+# unlinked loci from plink
+unlnk<-fread('../Data/plink/prune/prune_50.5.0.5.prune.in')
+setnames(unlnk, c("chromo","position"))
+
+dat91<-merge(dat91, unlnk)
+dat96<-merge(dat96, unlnk)
+dat06<-merge(dat06, unlnk)
+dat17<-merge(dat17, unlnk)
+
+years<-c("91","96","06","17")
+comb<-t(combn(years, 2))
+
+estNe<-data.frame(pop1=comb[,1], pop2=comb[,2])
+gens<-c(1,2.5,4.33,1.67,3.5,1.83)
+
+for (i in 1: nrow(comb)){
+    df1<-get(paste0("dat",comb[i,1]))
+    df2<-get(paste0("dat",comb[i,2]))
+    
+    setnames(df1, c("knownEM", 'nInd'), c("freq1", 'nInd1'))
+    setnames(df2, c("knownEM", 'nInd'), c("freq2", 'nInd2'))
+    
+    df <- df1[df2, .(chromo, position, freq1, freq2, nInd1, nInd2)][!is.na(freq1) & !is.na(freq2) & freq1 > 0.1 & freq2 > 0.1, ]
+    g=gens[i]
+    
+    estNe$Ne[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g)] 
+
+    # block bootstrapping across LGs
+    uq.ch <- df[, sort(unique(chromo))]
+
+    boot.re <- boot(uq.ch, jrNe2block, 1000, gen = g, alldata = df)
+    estNe$median[i]<-median(boot.re$t[is.finite(boot.re$t)]) # median bootstrap
+    estNe$mean[i]<-mean(boot.re$t[is.finite(boot.re$t)])
+    ci<-boot.ci(boot.re, type = c('perc'))
+    #95% C.I.
+    estNe$CI.low[i]<-ci$percent[4]
+    estNe$CI.up[i]<-ci$percent[5]
+    
+    #reset the attibutes
+    setnames(df1, c("freq1", 'nInd1'),c("knownEM", 'nInd'))
+    setnames(df2, c("freq2", 'nInd2'),c("knownEM", 'nInd'))
+}
+
+write.csv(estNe,"../Output/Ne/Jorde-Ryman_Ne.estimates_TB.csv")
+
+#estNe<-read.csv("../Output/Ne/Jorde-Ryman_Ne.estimates_TB.csv", row.names = 1)
+estNe$year<-apply(estNe["pop2"],1, function(x) {if (x=="96") x=1996
+                   else if (x=="06") x=2006
+                   else if (x=="17") x=2017})
+
+ggplot(estNe[c(1,4,6),], aes(x=year, y=Ne))+
+    geom_point(size=2, color="blue")+
+    geom_errorbar(aes(ymin = CI.low, ymax = CI.up), width = 0.2, color="blue")+
+    geom_path(color="blue")+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+ggtitle("TB")
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates_TB.png", width = 5, height = 3, dpi=300)
+
+```
+![](../Output/Ne/Jorde-Ryman_Ne.estimates_TB.png)  
+
+
+* SS population
+```{r eval=FALSE}
+#MAF data
+dat96<-fread("../Data/new_vcf/AF/SS96.mafs.gz")
+dat06<-fread("../Data/new_vcf/AF/SS06.mafs.gz")
+dat17<-fread("../Data/new_vcf/AF/SS17.mafs.gz")
+setkey(dat96, chromo, position)
+setkey(dat06, chromo, position)
+setkey(dat17, chromo, position)
+
+# unlinked loci from plink
+unlnk<-fread('../Data/plink/prune/prune_50.5.0.5.prune.in')
+setnames(unlnk, c("chromo","position"))
+
+dat96<-merge(dat96, unlnk)
+dat06<-merge(dat06, unlnk)
+dat17<-merge(dat17, unlnk)
+
+years<-c("96","06","17")
+comb<-t(combn(years, 2))
+
+estNe<-data.frame(pop1=comb[,1], pop2=comb[,2])
+gens<-c(1.67,3.5, 1.83)
+
+for (i in 1: nrow(comb)){
+    df1<-get(paste0("dat",comb[i,1]))
+    df2<-get(paste0("dat",comb[i,2]))
+    
+    setnames(df1, c("knownEM", 'nInd'), c("freq1", 'nInd1'))
+    setnames(df2, c("knownEM", 'nInd'), c("freq2", 'nInd2'))
+    
+    df <- df1[df2, .(chromo, position, freq1, freq2, nInd1, nInd2)][!is.na(freq1) & !is.na(freq2) & freq1 > 0.1 & freq2 > 0.1, ]
+    g=gens[i]
+    
+    estNe$Ne[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g)] 
+
+    # block bootstrapping across LGs
+    uq.ch <- df[, sort(unique(chromo))]
+
+    boot.re <- boot(uq.ch, jrNe2block, 1000, gen = g, alldata = df)
+    estNe$median[i]<-median(boot.re$t[is.finite(boot.re$t)]) # median bootstrap
+    estNe$mean[i]<-mean(boot.re$t[is.finite(boot.re$t)])
+    ci<-boot.ci(boot.re, type = c('perc'))
+    #95% C.I.
+    estNe$CI.low[i]<-ci$percent[4]
+    estNe$CI.up[i]<-ci$percent[5]
+    
+    #reset the attibutes
+    setnames(df1, c("freq1", 'nInd1'),c("knownEM", 'nInd'))
+    setnames(df2, c("freq2", 'nInd2'),c("knownEM", 'nInd'))
+}
+
+write.csv(estNe,"../Output/Ne/Jorde-Ryman_Ne.estimates_SS.csv")
+
+#estNe<-read.csv("../Output/Ne/Jorde-Ryman_Ne.estimates_TB.csv", row.names = 1)
+estNe$year<-apply(estNe["pop2"],1, function(x) {if (x=="96") x=1996
+                   else if (x=="06") x=2006
+                   else if (x=="17") x=2017})
+
+ggplot(estNe[c(1,3),], aes(x=year, y=Ne))+
+    geom_point(size=2, color="blue")+
+    geom_errorbar(aes(ymin = CI.low, ymax = CI.up), width = 0.2, color="blue")+
+    geom_path(color="blue")+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+ggtitle("SS")
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates_SS.png", width = 5, height = 3, dpi=300)
+
+```
+![](../Output/Ne/Jorde-Ryman_Ne.estimates_SS.png)
+
+
+* Plot 3 populations together
+```{r}
+
+ne<-data.frame()
+pops<-c("PWS","TB","SS")
+for (i in 1:3){
+    df<-read.csv(paste0("../Output/Ne/Jorde-Ryman_Ne.estimates_", pops[i],".csv"), row.names = 1)
+    df$pop<-pops[i]
+    ne<-rbind(ne, df)
+}
+
+ne$year<-apply(ne["pop2"],1, function(x) {if (x=="96") x=1996
+                   else if (x==6) x=2006
+                   else if (x==7) x=2007
+                   else if (x=="17") x=2017})
+ne2<-ne[c(1,4,6,7,10,12,13,15),]
+ne2$pop<-factor(ne2$pop, levels=c("TB","PWS","SS"))
+
+ggplot(ne2, aes(x=year, y=Ne, color=pop))+
+    geom_point(size=2)+
+    geom_errorbar(aes(ymin = CI.low, ymax = CI.up), width = 0.2)+
+    geom_path()+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+
+    scale_color_manual(values=cols)
+
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates_3Populations.png", width = 5, height = 3, dpi=300)
+
+```
+
+![](../Output/Ne/Jorde-Ryman_Ne.estimates_3Populations.png)
+<br>
+<br>
+# Pi null distribution
+
+## 1. Create persite theta.pest.gz files in angsd
+
+```{bash}
+
+/home/jamcgirr/apps/angsd/misc/thetaStat  print /home/ktist/ph/data/angsd/theta/PWS91_maf00.thetas.idx | gzip > /home/ktist/ph/data/angsd/theta/PWS91_maf00_thetas.pestPG.gz
+
+# Run printTheta.sh at farm
+```
+
+
+## 2. run R scripts at farm to create null distribution of genome-wide thetas
+
+Run angsd_theta_siteshuffle_null.sh at farm, which runs Pi_shuffle_pws.R 
+ - Takes long time, so create a script for each pop.year combination and run separately 
+
+Output from theta shuffling results are in Data/shuffle/theta.siteshuffle.50000.PWS91_PWS96.csv.gz
+
+
+## 3. Calculate p-values using the results from shuffling and plot the results  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#from codEvol angsd_theta_siteshuffle_null_stats.R
+
+###########################
+# load functions
+###########################
+require(data.table)
+require(plyr)
+require(ggplot2)
+require(RColorBrewer)
+
+
+#####################
+# read in and prep data
+#####################
+
+years<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(years, 2))
+# max theta per genome from reshuffling (all sites) from angsd_theta_siteshuffle_null.r
+
+chrmax <- fread('../Data/new_vcf/chr_sizes.bed')
+chrmax<-chrmax[,-2]
+colnames(chrmax)<-c("chr", "len")
+chrmax$start<-c(0,cumsum(chrmax$len)[1:(nrow(chrmax)-1)])
+
+chrmax$end<-cumsum(chrmax$len)
+chrmax$middle<-(chrmax$end-chrmax$start)/2+chrmax$start
+
+#setkey(chrmax, chr)
+
+#Functions to calculate p-values from codEvol
+calcpG <- function(thetachange, null){ # for increases in theta
+  return((sum(null > thetachange)+1)/(length(null)+1)) # equation from North et al. 2002 Am J Hum Gen
+}
+calcpL <- function(thetachange, null){ # for decreases in theta
+  return((sum(null < thetachange)+1)/(length(null)+1)) # equation from North et al. 2002 Am J Hum Gen
+}
+
+
+cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
+Datall<-data.table()
+for (p in 1: nrow(comb)){
+    # max theta per genome from reshuffling (all sites) from angsd_theta_siteshuffle_null.r
+    null<-fread(paste0('../Data/shuffle/theta.siteshuffle.50000.', comb[p,1],"_",comb[p,2],'.csv.gz'))
+    
+    #upper and lower 95%
+    null[, .(tWd_l95 = quantile(mintWd, 0.05), tWd_u95 = quantile(maxtWd, probs = 0.95),
+                tPd_l95 = quantile(mintPd, 0.05), tPd_u95 = quantile(maxtPd, probs = 0.95),
+                tDd_l95 = quantile(mintDd, 0.05), tDd_u95 = quantile(maxtDd, probs = 0.95))]
+
+    #assign(paste0("null.",comb[p,1],"_",comb[p,2]), null)    
+    
+    # sliding windows theta change (GATK sites) from angsd_theta_siteshuffle_null.r
+    dat<-fread(paste0('../Data/shuffle/theta_change_region_50000.', comb[p,1],"_",comb[p,2],'.csv.gz'), drop = 1)
+    dat[,pop:=paste0(comb[p,1],"_",comb[p,2])]
+    
+    dat<-merge(dat, chrmax[,c("chr","start")], by.x="Chromo", by.y = "chr")
+    dat[, POSgen := WinCenter + start]
+    dat[,start := NULL] #remove start
+    
+    #calculate p-values
+    #1. thetaW loci
+    dat[tWd > 0, tWd.p := calcpG(tWd, null$maxtWd), by = .(Chromo, WinCenter)] # thetaW  loci
+    dat[tWd <= 0, tWd.p := calcpL(tWd, null$mintWd), by = .(Chromo, WinCenter)]
+    #2. theta pi
+    dat[tPd > 0, tPd.p := calcpG(tPd, null$maxtPd), by = .(Chromo, WinCenter)] # theta pi
+    dat[tPd <= 0, tPd.p := calcpL(tPd, null$mintPd), by = .(Chromo, WinCenter)]
+    
+    #Tajima's D
+    dat[tDd > 0, tDd.p := calcpG(tDd, null$maxtDd), by = .(Chromo, WinCenter)] # tajima's D
+    dat[tDd <= 0, tDd.p := calcpL(tDd, null$mintDd), by = .(Chromo, WinCenter)]
+
+    write.csv(dat, file=gzfile(paste0('../Output/Pi/Shuffle/theta_siteshuffle_', comb[p,1],"_",comb[p,2],'.csv.gz')))
+    
+    Datall<-rbind(Datall, dat)
+}
+
+write.csv(Datall, file=gzfile(paste0('../Output/Pi/Shuffle/theta_siteshuffle_PWS_summary.csv.gz')))
+   
+
+## Plot the results
+
+#chromosome number locations
+winsz = 5e4 
+
+#Changes in Pi between years
+Datall$Chromo<-factor(Datall$Chromo, levels=c(paste0("chr",1:26)))
+Datall$pop<-factor(Datall$pop, levels=c("PWS91_PWS96","PWS91_PWS07","PWS91_PWS17","PWS96_PWS07","PWS96_PWS17","PWS07_PWS17"))
+
+ggplot(Datall, aes(POSgen, tPd/winsz, color = Chromo)) + 
+    geom_point(size = 0.5, alpha = 0.3) +
+    facet_wrap(~pop, ncol = 1) +
+    scale_color_manual(values = cols, guide="none") +
+    ylab('Change in pi per site')+xlab("Chromosome")+
+    ggtitle("Changes in Pi")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave(paste0('../Output/Pi/Shuffle/Changes_in_Pi_PWS.png'), width = 7.5, height = 9, dpi = 300)
+    
+# plot theta_Waterson change
+ggplot(Datall, aes(POSgen, tWd/winsz, color = Chromo)) + 
+  geom_point(size = 0.5, alpha = 0.3) +
+  scale_color_manual(values = cols, guide="none") +
+    facet_wrap(~pop, ncol = 1) +
+  ylab('Change in Wattersons theta per site')+xlab("Chromosome")+
+  ggtitle("Changes in Pi")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_thetaW_PWS.png', width = 7.5, height = 9, dpi = 300)
+
+# plot Tajima's D change
+ggplot(Datall, aes(POSgen, tDd, color = Chromo)) + 
+    geom_point(size = 0.5, alpha = 0.3) +
+    scale_color_manual(values = cols,guide="none") +
+    facet_wrap(~pop, ncol = 1) +
+    ylab('Change in Tajimas D per window')+xlab("Chromosome")+
+    ggtitle("Changes in Tajima's D")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_TajimasD_PWS.png', width = 7.5, height = 9, dpi = 300)
+
+```
+![](../Output/Pi/Shuffle/Changes_in_Pi_PWS.png)
+
+![](../Output/Pi/Shuffle/Changes_in_thetaW_PWS.png)
+
+![](../Output/Pi/Shuffle/Changes_in_TajimasD_PWS.png)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# plot pi p-value vs. position 
+cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
+Datall$Chromo<-factor(Datall$Chromo, levels=c(paste0("chr",1:26)))
+Datall$pop<-factor(Datall$pop, levels=c("PWS91_PWS96","PWS91_PWS07","PWS91_PWS17","PWS96_PWS07","PWS96_PWS17","PWS07_PWS17"))
+
+ggplot(Datall, aes(POSgen, -log10(tPd.p)*sign(tPd), color = Chromo)) + 
+    geom_point(size = 0.2, alpha = 0.3) +
+    facet_wrap(~pop, ncol = 1) +
+    scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+    ylab("log10(P-value)")+
+    geom_hline(yintercept = log10(0.05), linetype = 'dashed', color = 'grey') +
+    geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'grey')+
+    ggtitle("P-values for changes in Pi")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_Pi.siteshuffle.p-values_PWS.png', width = 7.5, height =11, units = 'in', dpi = 300)
+
+
+# plot thetaW p-value vs. position (all loci)
+ggplot(Datall, aes(POSgen, -log10(tWd.p)*sign(tWd), color = Chromo)) + 
+  geom_point(size = 0.2, alpha = 0.3) +
+  facet_wrap(~pop, ncol = 1) +
+  scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+    ylab("log10(P-value)")+
+  geom_hline(yintercept = log10(0.05), linetype = 'dashed', color = 'grey') +
+  geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'grey')+
+      ggtitle("P-values for changes in Theta")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_thetaW.siteshuffle.p-values_PWS.png', width = 7.5, height =11, units = 'in', dpi = 300)
+
+#plot Tajama's D p-value vs. position
+ggplot(Datall, aes(POSgen, -log10(tDd.p)*sign(tDd), color = Chromo)) + 
+    geom_point(size = 0.2, alpha = 0.3) +
+    facet_wrap(~pop, ncol = 1) +
+    scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+    ylab("log10(P-value)")+
+    geom_hline(yintercept = log10(0.05), linetype = 'dashed', color = 'grey') +
+    geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'grey')+
+    ggtitle("P-values for changes in Tajima's D")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_TajimaD.siteshuffle.p-values_PWS.png', width = 7.5, height =11, units = 'in', dpi = 300)
+
+```
+
+![](../Output/Pi/Shuffle/Changes_in_Pi.siteshuffle.p-values_PWS.png)
+
+
+![](../Output/Pi/Shuffle/Changes_in_thetaW.siteshuffle.p-values_PWS.png)
+
+![](../Output/Pi/Shuffle/Changes_in_TajimaD.siteshuffle.p-values_PWS.png)
+
+## 4. Outlier regions  
+
+
+```{r eval=FALSE}
+#################
+# print outliers
+#################
+
+Pi_outliers<-Datall[tPd.p < 0.05,]
+Theta_outliers<-Datall[tWd.p < 0.05,]
+TajimaD_outliers<-Datall[tDd.p < 0.05,] #no outliers
+
+pi<-data.frame(table(Pi_outliers$pop, Pi_outliers$Chromo))
+the<-data.frame(table(Theta_outliers$pop, Theta_outliers$Chromo))
+D<-data.frame(table(TajimaD_outliers$pop, TajimaD_outliers$Chromo))
+
+#plot PWS91-96, 96-07, and 07-17
+yrs<-c("PWS91_PWS96","PWS96_PWS07","PWS07_PWS17")
+col3<-brewer.pal(4,"PuRd")[2:4]
+
+pi2<-pi[pi$Var1 %in% yrs,]
+pi2$Var1<-factor(pi2$Var1, levels=yrs)
+ggplot(pi2, aes(x=Var2, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=col3)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(expression(paste("Changes in ", pi)))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/Pi_significant_perChrom_perPop.png", width = 8, height = 4, dpi=300) 
+
+th2<-the[the$Var1 %in% yrs,]
+th2$Var1<-factor(th2$Var1, levels=yrs)
+ggplot(th2, aes(x=Var2, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=col3)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(paste0("Changes in theta"))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/Theta_significant_perChrom_perPop.png", width = 8, height = 4, dpi=300) 
+
+D2<-D[D$Var1 %in% yrs,]
+D2$Var1<-factor(D2$Var1, levels=yrs)
+ggplot(D2, aes(x=Var2, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=col3)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+     ggtitle(paste0("Changes in Tajima's D"))+
+    xlab('')+ylab('Number of regions with P>0.05')
+ggsave("../Output/Pi/Shuffle/Pi_significant_perChrom_perPop.png", width = 8, height = 4, dpi=300) 
+
+```
+
+![](../Output/Pi/Shuffle/Pi_significant_perChrom_perPop.png)
+
+![](../Output/Pi/Shuffle/Theta_significant_perChrom_perPop.png)
+
+```{r echo=TRUE}
+
+sum<-data.frame(table(Pi_outliers$pop))
+sum2<-data.frame(table(Theta_outliers$pop))
+#sum3<-data.frame(table(TajimaD_outliers$pop)) no outliers
+
+sum<-cbind(sum, sum2$Freq)
+colnames(sum)<-c("Pops", "Pi", "Theta")
+knitr::kable(t(sum))
+```
+
+- Most differences exist between 1996 and 2007
+- Chr25 has the most significant regions for changes in Pi and Theta
+s

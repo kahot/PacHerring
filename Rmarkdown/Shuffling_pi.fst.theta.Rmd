@@ -1,0 +1,746 @@
+---
+title: "Shuffling Pi/Fst/Theta/D"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: True
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+
+# Find significantly different loci/regions between years using shuffling to create null distributions{.unnumbered}  
+ 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+require(data.table)
+require(plyr)
+require(RColorBrewer)
+```
+
+
+# Theta null distribution
+
+## Create persite theta.pest.gz files in angsd
+
+```{bash}
+
+/home/jamcgirr/apps/angsd/misc/thetaStat  print /home/ktist/ph/data/angsd/theta/PWS91_maf00.thetas.idx | gzip > /home/ktist/ph/data/angsd/theta/PWS91_maf00_thetas.pestPG.gz
+
+# Run printTheta.sh at farm
+```
+
+
+## Run R scripts at farm to create null distribution of genome-wide thetas
+
+Run angsd_theta_siteshuffle_null.sh at farm, which runs Pi_shuffle_pws.R 
+ - Takes long time, so create a script for each pop.year combination and run separately 
+
+Output from theta shuffling results are in Data/shuffle/theta.siteshuffle.50000.PWS91_PWS96.csv.gz
+
+
+## Calculate p-values for differences in theta, pi, and Tajima's D using the results from shuffling 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#from codEvol angsd_theta_siteshuffle_null_stats.R
+
+###########################
+# load functions
+###########################
+require(data.table)
+require(plyr)
+require(ggplot2)
+require(RColorBrewer)
+
+
+#####################
+# read in and prep data
+#####################
+
+years<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(years, 2))
+
+chrmax <- fread('../Data/new_vcf/chr_sizes.bed')
+chrmax<-chrmax[,-2]
+colnames(chrmax)<-c("chr", "len")
+chrmax$start<-c(0,cumsum(chrmax$len)[1:(nrow(chrmax)-1)])
+
+chrmax$end<-cumsum(chrmax$len)
+chrmax$middle<-(chrmax$end-chrmax$start)/2+chrmax$start
+
+#setkey(chrmax, chr)
+
+#Functions to calculate p-values from codEvol
+calcpG <- function(thetachange, null){ # for increases in theta
+  return((sum(null > thetachange)+1)/(length(null)+1)) # equation from North et al. 2002 Am J Hum Gen
+}
+calcpL <- function(thetachange, null){ # for decreases in theta
+  return((sum(null < thetachange)+1)/(length(null)+1)) # equation from North et al. 2002 Am J Hum Gen
+}
+
+
+cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
+Datall<-data.table()
+for (p in 1: nrow(comb)){
+    # max theta per genome from reshuffling (all sites) from angsd_theta_siteshuffle_null.r
+    null<-fread(paste0('../Data/shuffle/theta.siteshuffle.50000.', comb[p,1],"_",comb[p,2],'.csv.gz'))
+    
+    #upper and lower 95%
+    null[, .(tWd_l95 = quantile(mintWd, 0.05), tWd_u95 = quantile(maxtWd, probs = 0.95),
+                tPd_l95 = quantile(mintPd, 0.05), tPd_u95 = quantile(maxtPd, probs = 0.95),
+                tDd_l95 = quantile(mintDd, 0.05), tDd_u95 = quantile(maxtDd, probs = 0.95))]
+
+    #assign(paste0("null.",comb[p,1],"_",comb[p,2]), null)    
+    
+    # sliding windows theta change (GATK sites) from angsd_theta_siteshuffle_null.r
+    dat<-fread(paste0('../Data/shuffle/theta_change_region_50000.', comb[p,1],"_",comb[p,2],'.csv.gz'), drop = 1)
+    dat[,pop:=paste0(comb[p,1],"_",comb[p,2])]
+    
+    dat<-merge(dat, chrmax[,c("chr","start")], by.x="Chromo", by.y = "chr")
+    dat[, POSgen := WinCenter + start]
+    dat[,start := NULL] #remove start
+    
+    #calculate p-values
+    #1. thetaW loci
+    dat[tWd > 0, tWd.p := calcpG(tWd, null$maxtWd), by = .(Chromo, WinCenter)] # thetaW  loci
+    dat[tWd <= 0, tWd.p := calcpL(tWd, null$mintWd), by = .(Chromo, WinCenter)]
+    #2. theta pi
+    dat[tPd > 0, tPd.p := calcpG(tPd, null$maxtPd), by = .(Chromo, WinCenter)] # theta pi
+    dat[tPd <= 0, tPd.p := calcpL(tPd, null$mintPd), by = .(Chromo, WinCenter)]
+    
+    #Tajima's D
+    dat[tDd > 0, tDd.p := calcpG(tDd, null$maxtDd), by = .(Chromo, WinCenter)] # tajima's D
+    dat[tDd <= 0, tDd.p := calcpL(tDd, null$mintDd), by = .(Chromo, WinCenter)]
+
+    write.csv(dat, file=gzfile(paste0('../Output/Pi/Shuffle/theta_siteshuffle_', comb[p,1],"_",comb[p,2],'.csv.gz')))
+    
+    Datall<-rbind(Datall, dat)
+}
+
+write.csv(Datall, file=gzfile(paste0('../Output/Pi/Shuffle/theta_siteshuffle_PWS_summary.csv.gz')))
+```   
+
+## Plot the results  
+
+### Changes in Pi/Theta/D between years 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+## Plot the results ##
+Datall<-fread('../Output/Pi/Shuffle/theta_siteshuffle_PWS_summary.csv.gz')
+
+winsz = 5e4 
+
+#Changes in Pi between years
+Datall$Chromo<-factor(Datall$Chromo, levels=c(paste0("chr",1:26)))
+Datall$pop<-factor(Datall$pop, levels=c("PWS91_PWS96","PWS91_PWS07","PWS91_PWS17","PWS96_PWS07","PWS96_PWS17","PWS07_PWS17"))
+
+ggplot(Datall, aes(POSgen, tPd/winsz, color = Chromo)) + 
+    geom_point(size = 0.5, alpha = 0.3) +
+    facet_wrap(~pop, ncol = 1) +
+    scale_color_manual(values = cols, guide="none") +
+    ylab('Change in pi per site')+xlab("Chromosome")+
+    ggtitle("Changes in Pi")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave(paste0('../Output/Pi/Shuffle/Changes_in_Pi_PWS.png'), width = 7.5, height = 9, dpi = 300)
+
+# plot theta_Watterson change
+ggplot(Datall, aes(POSgen, tWd/winsz, color = Chromo)) + 
+  geom_point(size = 0.5, alpha = 0.3) +
+  scale_color_manual(values = cols, guide="none") +
+    facet_wrap(~pop, ncol = 1) +
+  ylab('Change in Wattersons theta per site')+xlab("Chromosome")+
+  ggtitle("Changes in Pi")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_thetaW_PWS.png', width = 7.5, height = 9, dpi = 300)
+
+# plot Tajima's D change
+ggplot(Datall, aes(POSgen, tDd, color = Chromo)) + 
+    geom_point(size = 0.5, alpha = 0.3) +
+    scale_color_manual(values = cols,guide="none") +
+    facet_wrap(~pop, ncol = 1) +
+    ylab('Change in Tajimas D per window')+xlab("Chromosome")+
+    ggtitle("Changes in Tajima's D")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_TajimasD_PWS.png', width = 7.5, height = 9, dpi = 300)
+
+```
+![](../Output/Pi/Shuffle/Changes_in_Pi_PWS.png){width=70%}
+
+![](../Output/Pi/Shuffle/Changes_in_thetaW_PWS.png){width=70%}
+
+![](../Output/Pi/Shuffle/Changes_in_TajimasD_PWS.png){width=70%}
+
+### Plot the p-values for differences in P/Theta along the genome 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# plot pi p-value vs. position 
+cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
+Datall$Chromo<-factor(Datall$Chromo, levels=c(paste0("chr",1:26)))
+Datall$pop<-factor(Datall$pop, levels=c("PWS91_PWS96","PWS91_PWS07","PWS91_PWS17","PWS96_PWS07","PWS96_PWS17","PWS07_PWS17"))
+
+ggplot(Datall, aes(POSgen, -log10(tPd.p)*sign(tPd), color = Chromo)) + 
+    geom_point(size = 0.4, alpha = 0.3) +
+    facet_wrap(~pop, ncol = 1) +
+    scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+    ylab("log10(P-value)")+
+    geom_hline(yintercept = log10(0.05), linetype = 'dashed', color = 'red',size=0.3) +
+    geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'red', size=0.3)+
+    ggtitle("P-values for changes in Pi")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_Pi.siteshuffle.p-values_PWS.png', width = 7.5, height =11, units = 'in', dpi = 300)
+
+
+# plot thetaW p-value vs. position (all loci)
+ggplot(Datall, aes(POSgen, -log10(tWd.p)*sign(tWd), color = Chromo)) + 
+  geom_point(size = 0.4, alpha = 0.3) +
+  facet_wrap(~pop, ncol = 1) +
+  scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+    ylab("log10(P-value)")+
+  geom_hline(yintercept = log10(0.05), linetype = 'dashed', color = 'red', size=0.3) +
+  geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'red', size=0.3)+
+      ggtitle("P-values for changes in Theta")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_thetaW.siteshuffle.p-values_PWS.png', width = 7.5, height =11, units = 'in', dpi = 300)
+
+#plot Tajama's D p-value vs. position
+ggplot(Datall, aes(POSgen, -log10(tDd.p)*sign(tDd), color = Chromo)) + 
+    geom_point(size = 0.4, alpha = 0.3) +
+    facet_wrap(~pop, ncol = 1) +
+    scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+    ylab("log10(P-value)")+
+    geom_hline(yintercept = log10(0.05), linetype = 'dashed',  color = 'red', size=0.3) +
+    geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'red', size=0.3)+
+    ggtitle("P-values for changes in Tajima's D")+
+    scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
+    theme_bw()
+ggsave('../Output/Pi/Shuffle/Changes_in_TajimaD.siteshuffle.p-values_PWS.png', width = 7.5, height =11, units = 'in', dpi = 300)
+
+```
+
+![](../Output/Pi/Shuffle/Changes_in_Pi.siteshuffle.p-values_PWS.png){width=70%}
+
+
+![](../Output/Pi/Shuffle/Changes_in_thetaW.siteshuffle.p-values_PWS.png){width=70%}
+
+![](../Output/Pi/Shuffle/Changes_in_TajimaD.siteshuffle.p-values_PWS.png){width=70%}
+
+## Find the regions with signfiicant P-values (Outlier regions)  
+
+### Pi
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Outliers
+
+Pi_outliers<-Datall[tPd.p < 0.05,]
+Theta_outliers<-Datall[tWd.p < 0.05,]
+TajimaD_outliers<-Datall[tDd.p < 0.05,] #no outliers
+
+# Summary per chromosome per population
+pi<-data.frame(table(Pi_outliers$pop, Pi_outliers$Chromo))
+the<-data.frame(table(Theta_outliers$pop, Theta_outliers$Chromo))
+D<-data.frame(table(TajimaD_outliers$pop, TajimaD_outliers$Chromo))
+
+# Summary per population
+pi2<-data.frame(table(Pi_outliers$pop))
+the2<-data.frame(table(Theta_outliers$pop))
+Ds2<-data.frame(table(TajimaD_outliers$pop))
+
+
+#plot PWS91-96, 96-07, and 07-17
+yrs<-c("PWS91_PWS96","PWS96_PWS07","PWS07_PWS17")
+col3<-brewer.pal(5,"PuRd")[c(2,3,5)]
+div1<-diverging_hcl(6, palette="Blue-Red")
+#reverse the color
+div2<-rev(div1)
+
+pis<-pi[pi$Var1 %in% yrs,]
+pis$Var1<-factor(pis$Var1, levels=yrs)
+ggplot(pis, aes(x=Var2, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=col3)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(expression(paste("Changes in ", pi)))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/Pi_significant_perChrom_perPop.png", width = 8, height = 4, dpi=300) 
+
+# Per population comparison
+ggplot(pi2, aes(x=Var1, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=div1)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(expression(paste("Changes in ", pi)))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/Pi_significant_perComparison.png", width = 5, height = 4, dpi=300) 
+
+#ordered
+pi3<-pi2[order(pi2$Freq, decreasing = T),]
+pi3$Var1<-factor(pi3$Var1, levels=paste0(unique(pi3$Var1)))
+ggplot(pi3, aes(x=Var1, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=div2)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(expression(paste("Changes in ", pi)))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/Pi_significant_perComparison_ordered.png", width = 5, height = 4, dpi=300) 
+
+#Assign colors to the comparison group
+names(div2)<- unique(pi3$Var1)
+
+
+```
+![](../Output/Pi/Shuffle/Pi_significant_perComparison_ordered.png)  
+
+
+![](../Output/Pi/Shuffle/Pi_significant_perChrom_perPop.png)  
+
+
+### Theta
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#Thetea
+ths<-the[the$Var1 %in% yrs,]
+ths$Var1<-factor(ths$Var1, levels=yrs)
+ggplot(ths, aes(x=Var2, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=col3)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(paste0("Changes in theta"))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/Theta_significant_perChrom_perPop.png", width = 5, height = 3, dpi=300) 
+
+ggplot(the2, aes(x=Var1, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=div1)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(paste("Changes in theta"))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/Theta_significant_perComparison.png", width = 5, height = 4, dpi=300) 
+
+
+the3<-the2[order(the2$Freq, decreasing = T),]
+the3$Var1<-factor(the3$Var1, levels=paste0(unique(the3$Var1)))
+
+ggplot(the3, aes(x=Var1, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(name = "Var1",values = div2)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(paste("Changes in theta"))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/Theta_significant_perComparison_ordered.png", width = 5, height = 4, dpi=300) 
+
+
+
+```
+![](../Output/Pi/Shuffle/Theta_significant_perComparison.png)
+
+![](../Output/Pi/Shuffle/Theta_significant_perChrom_perPop.png)
+
+
+### Tajima's D - No regions with P < 0.05  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+# Tajima's D
+ggplot(Ds2, aes(x=Var1, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=div1)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+    ggtitle(paste0("Changes in Tajima's D"))+
+    xlab('')+ylab('Number of regions with P<0.05')
+ggsave("../Output/Pi/Shuffle/TajimaD_significant_perComparison.png", width = 5, height = 4, dpi=300) 
+
+
+D2<-D[D$Var1 %in% yrs,]
+D2$Var1<-factor(D2$Var1, levels=yrs)
+ggplot(D2, aes(x=Var2, y=Freq, fill=Var1))+
+    geom_bar(stat="identity",position=position_dodge(width=0.8))+
+    scale_fill_manual(values=col3)+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
+     ggtitle(paste0("Changes in Tajima's D"))+
+    xlab('')+ylab('Number of regions with P>0.05')
+#ggsave("../Output/Pi/Shuffle/TajimaD_significant_perChrom_perPop.png", width = 8, height = 4, dpi=300) 
+
+```
+
+- Most differences exist between 1996 and 2007
+- Chr25 has the most significant regions for changes in Pi and Theta
+
+<br>
+<br>
+
+# Fst genome-scan using a null model
+* from Pinsky et al. 2021  https://github.com/pinskylab/codEvol
+* Create a null distribution of expected maximum Fst
+* Define a genome-wide p-value for each region as (r+1)/(n+1), where r was the number of null simulations with maximum change greater than or equal to the empirical value and n was the number of shuffles
+
+## Shuffle Fst and create a null model of max Fst
+* Based on angsd persite Fst output
+
+1. After running angsd (realSFS), print a persite Fst file 
+```{bash}
+#run FstPWSprint.sh
+
+/home/jamcgirr/apps/angsd/misc/realSFS fst print  /home/ktist/ph/data/angsd/analysis/fst_PWS91_PWS07_persite_maf00.fst.idx > /home/ktist/ph/data/angsd/analysis/fst_PWS91_PWS07_persite_maf00.txt
+bgzip /home/ktist/ph/data/angsd/analysis/fst_PWS91_PWS07_persite_maf00.txt
+
+```
+
+2. Run Fst_shuffle_pws.R at Farm (slurm script: angsd_fst_siteshuffle_null.sh)  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# From https://github.com/pinskylab/codEvol angsd_fst_siteshuffle_null.r
+
+# shuffle ANGSD persite FST A and B values across sites and calculate windowed FST to get a null distribution of max genome-wide FST
+# need fst persite output from angsd fst_*_persite_maf00.txt.gz files
+
+# to run on farm
+
+
+##### R code  ####### 
+
+# parameters
+winsz <- 50000 # window size
+winstp <- 10000 # window step
+nrep <- 1000 # number of reshuffles
+minloci <- 10 # minimum number of loci per window to consider
+
+
+# load functions
+require(data.table)
+
+
+#############
+# Prep data
+#############
+# load fst A/B data
+#can <- fread('analysis/Can_40.Can_14.fst.AB.gz')
+#setnames(can, c('CHROM', 'POS', 'A', 'B'))
+
+pws9196 <- fread('/home/ktist/ph/data/angsd/analysis/fst_PWS91_PWS96_persite_maf00.txt.gz')
+setnames(pws9196, c('CHROM', 'POS', 'A', 'B'))
+pws9107 <- fread('/home/ktist/ph/data/angsd/analysis/fst_PWS91_PWS07_persite_maf00.txt.gz')
+setnames(pws9107, c('CHROM', 'POS', 'A', 'B'))
+pws9117 <- fread('/home/ktist/ph/data/angsd/analysis/fst_PWS91_PWS17_persite_maf00.txt.gz')
+setnames(pws9117, c('CHROM', 'POS', 'A', 'B'))
+pws9607 <- fread('/home/ktist/ph/data/angsd/analysis/fst_PWS96_PWS07_persite_maf00.txt.gz')
+setnames(pws9607, c('CHROM', 'POS', 'A', 'B'))
+pws9617 <- fread('/home/ktist/ph/data/angsd/analysis/fst_PWS96_PWS17_persite_maf00.txt.gz')
+setnames(pws9617, c('CHROM', 'POS', 'A', 'B'))
+pws0717 <- fread('/home/ktist/ph/data/angsd/analysis/fst_PWS07_PWS17_persite_maf00.txt.gz')
+setnames(pws0717, c('CHROM', 'POS', 'A', 'B'))
+
+PWS<-list()
+PWS[[1]]<-pws9196
+PWS[[2]]<-pws9107
+PWS[[3]]<-pws9117
+PWS[[4]]<-pws9607
+PWS[[5]]<-pws9617 
+PWS[[6]]<-pws0717 
+    
+ 
+# create new columns as indices for windows
+
+for (i in 1: length(PWS)){
+    df<-PWS[[i]]
+    for(j in 1:(winsz/winstp)){
+        df[, (paste0('win', j)) := floor((POS - (j-1)*winstp)/winsz)*winsz + winsz/2 + (j-1)*winstp]
+    }
+    PWS[[i]]<-df
+}
+
+# mark windows with < minloci for removal
+rem <- rep(0, 6) # number of windows removed for each of the 6 comparisons
+
+for(i in 1: length(PWS)){
+    pw<-PWS[[i]]
+    for(j in 1:(winsz/winstp)){
+        pwwin <- pw[, .(nsnps = length(POS)), by = .(win = get(paste0('win', j)))] # calc num snps per window
+        rem[1] <- rem[1] + pwwin[, sum(nsnps < minloci)] # record number to be removed
+        pwwin[, (paste0('win', j, 'keep')) := 1] # create col to mark which windows to keep
+        pwwin[nsnps < minloci, (paste0('win', j, 'keep')) := 0] # mark windows to remove
+        pwwin[, nsnps := NULL] # drop column
+        setnames(pwwin, "win", paste0('win', j)) # change col name
+        pw <- merge(pw, pwwin, by = paste0('win', j), all.x = TRUE) # merge keeper col back to full dataset
+    }
+    PWS[[i]]<-pw
+}
+
+rem # number of windows removed for each comparison
+
+
+
+
+####################################
+# shuffle and recalc windowed FST
+####################################
+colnms <- c('CHROM', 'POS', paste0('win', 1:(winsz/winstp)), paste0('win', 1:(winsz/winstp), 'keep')) # list of column names we want out of the base data.table
+
+# PWS07-17
+pops<-c("PWS91.96","PWS91.07","PWS91.17","PWS96.07","PWS96.17","PWS07.17")
+
+
+for(p in 1:length(PWS)){
+    print(paste0('Starting ', pops[p]))
+
+    pw<-PWS[[p]]
+    for(i in 1:nrep){
+        cat(i); cat(' ')
+        # create new dataset
+        inds <- sample(1:nrow(pw), nrow(pw), replace = FALSE)
+        temp <- cbind(pw[, ..colnms], pw[inds, .(A, B)]) # shuffle FSTs across positions
+        
+        # calc fst for each window to keep
+        for(j in 1:(winsz/winstp)){
+            temp2 <- temp[get(paste0('win', j, 'keep')) == 1, ] # trim to windows to keep. can't combine with next line for some reason.
+            if(j ==1) tempfsts <- temp2[, .(fst = sum(A)/sum(B)), by = .(CHROM, POS = get(paste0('win', j)))]
+            if(j > 1) tempfsts <- rbind(tempfsts, temp2[, .(fst = sum(A)/sum(B)), by = .(CHROM, POS = get(paste0('win', j)))])
+        }
+        
+        # save the max windowed fst
+        # exclude windows with negative midpoints
+        if(i == 1) maxfst <- tempfsts[POS > 0, max(fst, na.rm = TRUE)]	
+        if(i > 1) maxfst <- c(maxfst, tempfsts[POS > 0, max(fst, na.rm = TRUE)])
+    }
+
+    print(paste('Max:', max(maxfst, na.rm = TRUE), '; 95th:', quantile(maxfst, prob = 0.95, na.rm = TRUE)))
+    
+    write.csv(maxfst, gzfile(paste0('/home/ktist/ph/data/angsd/analysis/',pops[p], '_siteshuuffle.csv.gz')), row.names = FALSE)
+    rm(maxfst)
+}
+
+```
+
+
+## Assess the results from site reshuffled Fst 
+Need 
+- sitehuffle results *fst_siteshuuffle.csv.gz
+- window-based Fst results from angsd *_50kWindow_maf00
+- persite Fst files after LD pruning (with AB info) *_persite_maf00_ldtrim.csv.gz 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#from https://github.com/pinskylab/codEvol
+
+# parameters
+minloci <- 10 
+winsz <- 50000 # window size
+winstp <- 10000 # window step
+
+# load functions
+require(data.table)
+require(ggplot2)
+
+calcp <- function(fst, null) return((sum(null > fst)+1)/(length(null)+1)) # equation from North et al. 2002 Am J Hum Gen
+
+# read in and prep data
+years<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(years, 2))
+
+# continuous nucleotide position for the whole genome
+chrmax <- fread('../Data/new_vcf/chr_sizes.bed')
+chrmax<-chrmax[,-2]
+colnames(chrmax)<-c("chr", "len")
+chrmax$start<-c(0,cumsum(chrmax$len)[1:(nrow(chrmax)-1)])
+setkey(chrmax, chr)
+
+prunedFst_gw<-data.frame(pop1=comb[,1],pop2=comb[,2])
+#for (p in 1: nrow(comb)){
+    for (p in 1:5){
+    #genome-wide max Fst from reshuffling (unlinked sites)
+    null<-fread(paste0('Data/shuffle/', comb[p,1],".",comb[p,2],'_fst_siteshuuffle.csv.gz'))
+    #window-based Fst from angsd            
+    fstwin <- fread(paste0('Data/new_vcf/angsd/fromVCF/2D/fst_',comb[p,1],"_",comb[p,2],'_50kWindow_maf00'), header = FALSE, col.names = c('region', 'chr', 'midPos', 'Nsites', 'fst')) # all sites
+    #persite fst (AB) -pruned sites
+    AB <- fread(paste0('Data/shuffle/fst_',comb[p,1],"_",comb[p,2],'_persite_maf00_ldtrim.csv.gz'))
+    
+    # merge nucleotide position into the frequency files
+    setkey(AB, CHROM)
+    AB <- AB[chrmax[, .(CHROM = chr, start)], ]
+    AB[, posgen := POS + start]
+    AB[,start := NULL]
+    
+    # Calc genome-wide FST
+    prunedFst_gw$gwFst[p]<-AB[!is.na(A), sum(A)/sum(B)]
+    
+    # Calc windowed FST
+    # create new columns as indices for windows
+    for(j in 1:(winsz/winstp)){
+        AB[, (paste0('win', j)) := floor((POS - (j-1)*winstp)/winsz)*winsz + winsz/2 + (j-1)*winstp]
+    }
+    
+    # calc fst and # snps per window
+    for(j in 1:(winsz/winstp)){
+        if(j ==1){
+            fstwin <- AB[, .(fst = sum(A)/sum(B), nloci = length(POS)), by = .(CHROM, midPos = get(paste0('win', j)))]
+        } 
+        if(j > 1){
+            fstwin <- rbind(fstwin, AB[, .(fst = sum(A)/sum(B), nloci = length(POS)), by = .(CHROM, midPos = get(paste0('win', j)))])
+        } 
+    }
+    
+    ## null model stats
+    fstats<-null[, .(max = max(x), u95 = quantile(x, probs = 0.95))]
+    prunedFst_gw$null.Fstmax[p]<-fstats$max[1]
+    prunedFst_gw$null.Fst.95q[p]<-fstats$u95[1]
+    
+    #Calculate p-values
+    pval<-fstwin[, p := calcp(fst, null$x), by = .(CHROM, midPos)]
+    
+    #combined the datasets
+    pair<-paste0(comb[p,1],"_",comb[p,2])
+    fstwin[, pop := pair ]
+    write.csv(fstwin, paste0("../Output/Fst/fst_siteshuffle.pairwise_", pair,".csv"))
+}
+
+write.csv(prunedFst_gw, "../Output/Fst/fst_siteshuffle_pws_summary.csv")
+
+data<-data.frame()
+for(i in 1: nrow(comb)){
+    pair<-paste0(comb[i,1],"_",comb[i,2])
+    df<-fread(paste0("../Output/Fst/fst_siteshuffle.pairwise_", pair,".csv"))
+    df<-df[!is.na(fst) & midPos > 0, ]
+    df[,ch:= as.integer(gsub("chr",'', CHROM))]
+    setkey(df,CHROM)
+    df<-df[chrmax[, .(CHROM = chr, start)], ]
+    df[,pos.gw:= midPos+start]
+    #setkey(df, ch, midPos)
+    data<-rbind(data, df)
+}
+
+write.csv(data, file = gzfile('../Output/Fst/fst_siteshuffle.angsd.PWS.csv.gz'), row.names = FALSE)
+```
+
+
+## Plot the results      
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+data<-fread('../Output/Fst/fst_siteshuffle.angsd.PWS.csv.gz')
+
+#pop as factor 
+data[, pop := factor(pop, levels = c("PWS91_PWS96","PWS91_PWS07","PWS91_PWS17","PWS96_PWS07","PWS96_PWS17","PWS07_PWS17"))]
+
+# plot p-value vs. position
+two_cols<-rep(c("steelblue","lightblue"), times=13)
+minloci <- 10 # minimum number of loci per window to consider
+
+ggplot(data[nloci >= minloci, ], aes(pos.gw, -log10(p), color = factor(ch))) + 
+    geom_point(size = 0.2, alpha = 0.5) +
+    facet_wrap(~pop, ncol = 1) +
+    scale_color_manual(values = two_cols, guide='none') +
+    geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'grey')+
+    theme_bw()+
+    theme(axis.text.x = element_blank())+
+    xlab("Genome")
+ggsave("../Output/Fst/fst.siteshuffle.p_vs_pos.PWS.png", width = 7.5, height = 7.5,dpi = 300)
+```
+![](../Output/Fst/fst.siteshuffle.p_vs_pos.PWS.png)
+
+- Number of loci per window vs. Fst p-values
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# plot p-value vs. nloci to check if any biases exist
+ggplot(data, aes(nloci, -log10(p), color = pop)) + 
+    geom_point(size = 0.6, alpha = 0.5) +
+    geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'grey') + 
+    scale_x_log10()+theme_bw()+theme(legend.title = element_blank())+
+    guides(color = guide_legend(override.aes = list(size = 3, alpha=1)))
+ggsave("../Output/Fst/fst.siteshuffle.p_vs_nloci.PWS.png", width = 8, height =4,dpi = 300)
+```
+
+![](../Output/Fst/fst.siteshuffle.p_vs_nloci.PWS.png){width=70%}
+
+## Significant outlier regions  
+
+### p-value < 0.05
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+outliers<-data[p < 0.05, ]
+write.csv(outliers, "../Output/Fst/Fst_nullshuffling_outliers_PWS.csv")
+
+counts<-data.table(table(outliers$pop))
+ggplot(counts, aes(x=V1, y=N))+
+    geom_bar(stat="identity", fill=cols[4])+
+    xlab('')+ylab('')+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave("../Output/Fst/Fst_outliers_byComparison.png", width = 4, height = 3, dpi=300 )
+
+
+counts$V1<-factor(counts$V1, levels=c("PWS96_PWS07","PWS07_PWS17","PWS91_PWS96", "PWS91_PWS07", "PWS91_PWS17","PWS96_PWS17"))
+ggplot(counts, aes(x=V1, y=N, fill=V1))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(name = "V",values = div2)+
+    xlab('')+ylab('Number of regions with P<0.05')+
+    theme_classic()+ggtitle("Fst (shuffle)")+
+    theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())
+ggsave("../Output/Fst/Fst_outliers_byComparison_ordered.png", width = 4, height = 3, dpi=300 )
+
+
+
+#outliers<-read.csv("../Output/Fst/Fst_nullshuffling_outliers_PWS.csv", row.names = 1)
+knitr::kable(outliers[,c(2,3,4,5,6,7,8)], caption="Outlier regions")
+
+#Outlier regions
+#CHROM	midPos	fst	nloci	p	pop	ch
+#chr25	825000	0.1210997	138	0.003996	PWS96_PWS07	25
+#chr25	835000	0.0818802	279	0.020979	PWS96_PWS07	25
+#chr25	845000	0.0721926	311	0.033966	PWS96_PWS07	25
+#chr25	805000	0.1242652	166	0.002997	PWS96_PWS07	25
+#chr25	815000	0.1377218	155	0.002997	PWS96_PWS07	25
+#chr19	1375000	0.1251602	42	0.003996	PWS07_PWS17	19
+
+```
+![](../Output/Fst/Fst_outliers_byComparison.png) 
+
+
+### Top 1% outliers & P< 0.2
+* relaxing the cutoff
+```{r}
+#data<-fread('../Output/Fst/fst_siteshuffle.angsd.PWS.csv.gz')
+dat<-data[order(p),]
+top1<-dat[1:(nrow(dat)*0.01),]
+top1<-top1[p<0.2,]
+
+counts2<-data.table(table(top1$pop))
+ggplot(counts2, aes(x=V1, y=N))+
+    geom_bar(stat="identity", fill=cols[4])+
+    xlab('')+ylab('')+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle=45, hjust=1))
+ggsave("../Output/Fst/Fst_outliers_byComparison_top1percent.png", width = 4, height = 3, dpi=300 )
+
+
+
+
+knitr::kable(top1[,c(2,3,4,5,6,7,8)])
+```
+![](../Output/Fst/Fst_outliers_byComparison_top1percent.png)  
+
+![](../Output/Fst/pcangsd_scan_highPsites.png)  
+* **NO overlapping regions from PCAngsd selection scan**
+
+
+
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```

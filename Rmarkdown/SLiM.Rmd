@@ -1,0 +1,547 @@
+---
+title: "SLiM Results"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+
+---
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(gridExtra)
+library(tidyverse)
+library(cowplot)
+```
+
+
+
+```{R eval=FALSE, message=FALSE, warning=FALSE}
+## Use VCF outputs. This is unnecessary.
+
+# Create a bash script to extract mutation information from Slim output files using perl
+
+sink(paste0("~/Projects/SLiM/extractMutaions.sh"))
+gentime<-c(1000,1005,1010,1020)
+filename<-"nonWF_neutral1.txt"
+modelname<-c("nonWF")
+for (i in 1: length(gentime)){
+    cat(paste0("perl -lne 'if(/OUT: ",gentime[i]," SS p1 200/../Genome/){s/.*?(OUT: ",gentime[i]," SS p1 200)/$1/ if!$i++;s/Genome\K.*//&&print&&exit;print}' ", filename, "  > mut",i,"\n"))
+    cat(paste0("sed '$d' mut",i," > ",modelname,i,".txt\n"))
+}
+sink(NULL)
+```
+
+# Allele frequency changes over time (neutral simulations) 
+
+```{R eval=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+#200 genomes (100 individuals) at generation 1000,1005,1010,1020 
+
+time<-c(1000,1005,1010,1020)
+results<-data.frame()
+for (i in 1:4){
+    df<-read.table(paste0("~/Projects/SLiM/PacHerring/nonWF_mutation",i,".txt"), skip=2)
+        df$AF<-df$V9/200
+        df$time<-time[i]
+        results<-rbind(results,df)
+}
+results2<-data.frame()
+for (i in 1:4){
+    df<-read.table(paste0("~/Projects/SLiM/PacHerring/WF_mutation",i,".txt"), skip=2)
+        df$AF<-df$V9/200
+        df$time<-time[i]
+        results2<-rbind(results2,df)
+}
+
+mean<-data.frame(aggregate(results$AF, by=list(results$time), FUN=mean))
+mean2<-data.frame(aggregate(results2$AF, by=list(results2$time), FUN=mean))
+colnames(mean)<-c("Time","AF")
+colnames(mean2)<-c("Time","AF")
+mean$Model<-"nonWF"
+mean2$Model<-"WF"
+Re<-rbind(mean, mean2)
+
+ggplot(Re, aes(x=Time, y=AF, color=Model))+
+    geom_point()+theme_light()+ylim(0.006,0.02)+
+    geom_line(aes(x=Time, y=AF, group=Model))
+ggsave("../Output/COV/Sim/meanAF.WF.vs.nonWF.png", width = 5, height = 3, dpi=300)  
+```    
+![](../Output/COV/Sim/meanAF.WF.vs.nonWF.png)   
+
+
+# Temporal Covariance Analysis
+
+## Data processing: Subsampled individuals
+1. Create sample names files for the generated VCF files  
+
+``` {r eval=FALSE, message=FALSE, warning=FALSE}   
+#1. Fixed number of individuals
+
+#Select the number of time points and number of samples (individuals)
+t=10
+n=100
+
+#Create a name file to rename the samples in vcf
+for (i in 1:t){
+    df<-data.frame(sample=paste0("time",i-1,".",1:n))
+    write.table(df, paste0("~/Projects/SLiM/PacHerring/newsampleids.",i-1,".txt"), row.names = F, col.names = F, quote = F)
+}
+
+
+#2. the Entire population
+#number of time period
+t=10
+log<-read.csv("~/Projects/SLiM/PacHerring/nonWF_neutral_log2.txt")
+times<-seq(1000, 1000+10*(t-1), 10) 
+#Create a name file to rename the samples in vcf
+for (i in 1:t){
+    n<-log$num_individuals[log$generation==times[i]]
+    df<-data.frame(sample=paste0("time",i-1,".",1:n))
+    write.table(df, paste0("~/Projects/SLiM/PacHerring/newsampleids.",i-1,".txt"), row.names = F, col.names = F, quote = F)
+}
+
+
+```
+
+
+2. Create a bash script to process Slim VCF files 
+
+``` {r eval=FALSE, message=FALSE, warning=FALSE}    
+#Create the bash script to reformat the output of slim
+#select the appropriate name
+run<-"nonWF.K10000.sub100"  #select a name
+model<-"nonWF"
+run<-"WF.N10000.sub100"  #select a name
+model<-"WF"
+run<-"WF.N1000.sub100.Pos0.2.g5000" 
+
+t<-10
+all<-'' # ('all' or '' none)
+
+# 1. Create a bash script
+sink(paste0("~/Projects/SLiM/PacHerring/slim_",run,".sh"))
+cat("#!/bin/bash \n\n")
+cat(paste0("mkdir ", run, " \n"))
+#rename the samples
+for (i in 1:t){
+    cat(paste0("bcftools reheader ",model,all,"_time",i-1,".vcf -s newsampleids.",i-1,".txt -o ",run,"/",model,"_time",i-1,".vcf \n"))
+}
+
+cat(paste0("cd ",run," \n"))
+cat("for f in *.vcf; do filename=$(basename $f); bgzip $f ; done \n")
+cat("for f in *.vcf.gz; do filename=$(basename $f); bcftools index $f ; done \n")
+#find intersecting loci
+cat(paste0("bcftools isec -n=",t," -p isec --threads 10 *vcf.gz \n"))
+cat(paste0("bcftools merge *vcf.gz -o ",model,"_combined.vcf.gz \n"))
+cat(paste0("bcftools index ",model,"_combined.vcf.gz \n"))
+# extract intersec loci from the combined 
+cat(paste0("bcftools view -R isec/sites.txt ",model,"_combined.vcf.gz -Oz > ",model,"_isec.vcf.gz \n"))
+cat(paste0("rm isec/*.vcf"))
+sink(NULL)
+
+## Run  bash slim_xxxx.sh
+```
+
+# Results from temporal covariance analysis
+* Need to randomly permute the tracked allele (draw a Bernoulli random variable and if it's 1 you randomly flip the frequency) to avoid bias 
+
+Functions to create covariance summary plots  
+```{r eval=FALSE, message=FALSE, warning=FALSE} 
+# function to read the covariance output file form cvtkpy with 4 time points, simulation pws pops
+# fname=file name, model= "WF" or "nonWF", t=# of time points)
+require("stringr")
+covResults<-function(fname, model, t){
+    cov<-read.csv(paste0("~/Projects/Pacherring_Vincent/slim/",fname))
+    cov<-cov[,-1]
+    #reshape the matrix
+    mat1<-cov[1:(t-1),]
+    mat2<-cov[t:(2*t-2),]
+    
+    covdf<-data.frame()
+    k=1
+    for (i in 1:nrow(mat1)){
+        for (j in 1:ncol(mat1)){
+         covdf[k,1]<-mat2[i,j]
+         covdf[k,2]<-mat1[i,j]
+         k=k+1
+        }
+    }
+    colnames(covdf)<-c("label","value")
+    covdf$value<-as.numeric(covdf$value)
+    covar<-covdf[grep("cov",covdf$label),]
+            
+    #remove the redundant values
+    ids<-str_match(covar$label, "sim:\\s(.*?)\\,\\ssim:\\s(.*?)\\)")
+    ids<-ids[,2:3]
+    remove<-duplicated(lapply(1:nrow(ids), function(x) {
+        A<-ids[x,]
+        A[order(A)]
+    }  ))
+    covar<-covar[!remove,] 
+    
+    #assign the starting time period and covering period values
+    vecn<-1:(t-2)
+    syr<-c()
+    for (i in 1:length(vecn)){
+        syr<-c(syr, rep(i, times=(t-i-1)))
+    }
+    covar$start_year<-syr
+    
+    eyr<-c()
+    for (i in 1:(t-2)){
+        v<-(i+1):(t-1)
+        eyr<-c(eyr,v)
+    }
+    covar$end_year<-eyr
+
+    newfile<-gsub(".csv","", fname)
+    newfile<-gsub("_temp_cov_matrix","", newfile)
+    ggplot(data=covar, aes(x=end_year, y=value,group=start_year, color=factor(start_year)))+
+        geom_point(size=3)+
+        geom_line()+
+        ylab("Covariance")+xlab('')+theme_classic()+
+        theme(axis.text.x = element_blank(),legend.title = element_blank())+
+        geom_hline(yintercept = 0,color="gray70", size=0.3)+ggtitle(paste0(model))+
+        scale_y_continuous(labels = scales::comma, limits = c(-0.001,0.001))
+    ggsave(paste0("../Output/COV/Sim/", newfile, "_neutral.png"),width = 6, height = 3, dpi=300)
+    print(paste0("../Output/COV/Sim/", newfile, "_neutral.png"))
+}
+
+#No ylim
+covResults2<-function(fname, model, t){
+    cov<-read.csv(paste0("~/Projects/Pacherring_Vincent/slim/",fname))
+    cov<-cov[,-1]
+    #reshape the matrix
+    mat1<-cov[1:(t-1),]
+    mat2<-cov[t:(2*t-2),]
+    
+    covdf<-data.frame()
+    k=1
+    for (i in 1:nrow(mat1)){
+        for (j in 1:ncol(mat1)){
+         covdf[k,1]<-mat2[i,j]
+         covdf[k,2]<-mat1[i,j]
+         k=k+1
+        }
+    }
+    colnames(covdf)<-c("label","value")
+    covdf$value<-as.numeric(covdf$value)
+    covar<-covdf[grep("cov",covdf$label),]
+            
+    #remove the redundant values
+    ids<-str_match(covar$label, "sim:\\s(.*?)\\,\\ssim:\\s(.*?)\\)")
+    ids<-ids[,2:3]
+    remove<-duplicated(lapply(1:nrow(ids), function(x) {
+        A<-ids[x,]
+        A[order(A)]
+    }  ))
+    covar<-covar[!remove,] 
+    
+    #assign the starting time period and covering period values
+    vecn<-1:(t-2)
+    syr<-c()
+    for (i in 1:length(vecn)){
+        syr<-c(syr, rep(i, times=(t-i-1)))
+    }
+    covar$start_year<-syr
+    
+    eyr<-c()
+    for (i in 1:(t-2)){
+        v<-(i+1):(t-1)
+        eyr<-c(eyr,v)
+    }
+    covar$end_year<-eyr
+
+    newfile<-gsub(".csv","", fname)
+    newfile<-gsub("_temp_cov_matrix","", newfile)
+    ggplot(data=covar, aes(x=end_year, y=value,group=start_year, color=factor(start_year)))+
+        geom_point(size=3)+
+        geom_line()+
+        ylab("Covariance")+xlab('')+theme_classic()+
+        theme(axis.text.x = element_blank(),legend.title = element_blank())+
+        geom_hline(yintercept = 0,color="gray70", size=0.3)+ggtitle(paste0(model))+
+        scale_y_continuous(labels = scales::comma)
+    ggsave(paste0("../Output/COV/Sim/", newfile, "_neutral_noylim.png"),width = 6, height = 3, dpi=300)
+    print(paste0("../Output/COV/Sim/", newfile, "_neutral_noylim.png"))
+}
+```
+
+## Use the entire population to calculate COV and AF (no subsampling of individuals)
+
+### WF neutral (all individuals, 10  timepoints)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE} 
+covResults("Slim_WF_N1000_noCnoS_temp_cov_matrix_250kwin.csv", "WF neutral all (N=1000)", 10)
+```
+![WF](../Output/COV/Sim/Slim_WF_N1000_noCnoS_250kwin_neutral.png){width=70%}
+
+### WF with nonWF model, neutral (all individuals, 10  timepoints)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE} 
+covResults("Slim_WFnonwf_K1000_noCnoS_temp_cov_matrix_250kwin.csv", "WFnonwf neutral all (K=1000)", 10)
+
+```
+![WF](../Output/COV/Sim/Slim_WFnonwf_K1000_noCnoS_250kwin_neutral.png){width=70%}
+
+### nonWF neutral (K=1000, all individuals, 10  timepoints)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE} 
+#covResults("Slim_nonWF_all_K1000_t10_temp_cov_matrix_250kwin.csv", "nonWF neutral all (K=1000)", 10)
+covResults("Slim_nonWF_K1000_noCnoS_temp_cov_matrix_250kwin.csv", "nonWF neutral all (K=1000, noCnoS)", 10)
+
+```
+![](../Output/COV/Sim/Slim_nonWF_K1000_noCnoS_250kwin_neutral.png){width=70%}
+```{r}
+covResults("Slim_nonWF_K1000_wCwS_temp_cov_matrix_250kwin.csv", "nonWF neutral all (K=1000)", 10)
+
+```
+
+
+![](../Output/COV/Sim/Slim_nonWF_all_K1000_t10_250kwin_neutral.png){width=70%}
+
+
+## Subsampling 100 individuals from a population (N=1000): no correction
+
+### WF (N=1000, sub100)  -no bias correction applied
+
+```{r eval=FALSE, message=FALSE, warning=FALSE} 
+covResults2("Slim_WF_N1000_sub100.v2_noCnoS_temp_cov_matrix_250kwin.csv", "WF neutral (sampled 100, no correction)", 10)
+
+```
+![](../Output/COV/Sim/Slim_WF_N1000_sub100.v2_noCnoS_250kwin_neutral_noylim.png){width=40%}
+
+* Set Y-axis to -0.001 - 0.001:
+
+```{r eval=FALSE, include=FALSE, message=FALSE}
+covResults("Slim_WF_N1000_sub100.v2_noCnoS_temp_cov_matrix_250kwin.csv", "WF neutral (sampled 100, no correction)", 10)
+```
+![](../Output/COV/Sim/Slim_WF_N1000_sub100.v2_noCnoS_250kwin_neutral.png){width=70%}
+
+
+
+### WF (N=1000, sub100)  with bias correction applied
+
+```{r eval=FALSE, include=FALSE, message=FALSE}
+covResults2("Slim_WF_N1000_sub100.v2_wCwS_temp_cov_matrix_250kwin.csv", "WF neutral v2 (N=1000,sub=100)", 10)
+```
+![](../Output/COV/Sim/Slim_WF_N1000_sub100.v2_wCwS_250kwin_neutral.png){width=70%}
+
+### WF with nonWF model (K=1000, sub=100) -no bias correction
+
+```{r eval=FALSE, include=FALSE, message=FALSE}
+covResults("Slim_WFnonwf_K1000_sub100_noCnoS_temp_cov_matrix_250kwin.csv", "WFnonwf neutral (K=1000, sub=100), no correction", 10)
+```
+![](../Output/COV/Sim/Slim_WFnonwf_K1000_sub100_noCnoS_250kwin_neutral.png){width=70%}
+
+### WF with nonWF model (K=1000, sub=100) -with bias correction
+
+```{r eval=FALSE, include=FALSE, message=FALSE}
+covResults2("Slim_WFnonwf_K1000_sub100_wCwS_temp_cov_matrix_250kwin.csv", "WFnonwf neutral (K=1000, sub=100), no correction", 10)
+```
+![](../Output/COV/Sim/Slim_WFnonwf_K1000_sub100_wCwS_250kwin_neutral_noylim.png){width=70%} 
+
+
+### nonWF model (K=1000, sub=100) -no bias correction
+
+```{r eval=FALSE, include=FALSE, message=FALSE}
+covResults("Slim_nonWF_K1000_sub100_noCnoS_temp_cov_matrix_250kwin.csv", "WFnonwf neutral (K=1000, sub=100), no correction", 10)
+```
+![](../Output/COV/Sim/Slim_nonWF_K1000_sub100_noCnoS_250kwin_neutral.png){width=70%}
+
+### nonWF model (K=1000, sub=100) -with bias correction
+
+```{r eval=FALSE, include=FALSE, message=FALSE}
+covResults2("Slim_nonWF_K1000_sub100_wCwS_temp_cov_matrix_250kwin.csv", "WFnonwf neutral (K=1000, sub=100), with correction", 10)
+```
+![](../Output/COV/Sim/Slim_WFnonwf_K1000_sub100_wCwS_250kwin_neutral_noylim.png){width=70%}
+
+
+
+
+
+
+### WF N=100 entire population  
+
+```{r eval=FALSE, include=FALSE, echo=TRUE}
+#list file names from temp cov analysis
+#covfiles<-list.files("~/Projects/Pacherring_Vincent/slim/", pattern="Slim_")
+
+covResults2("Slim_WF_N100_noCnoS_temp_cov_matrix_250kwin.csv", "WF neutral all (N=100)", 10)
+```
+![WF](../Output/COV/Sim/Slim_WF_N100_noCnoS_250kwin_neutral_noylim.png){width=70%}
+
+## Sample 1000 individuals from N=10000 population  
+
+### WF neutral N=10000, sub=1000 (no bias correction, no standardization)
+
+```{r}
+#covResults2("Slim_WF_N10000_sub1000_noCnoS_temp_cov_matrix_250kwin.csv", "WF neutral (N=10000, sub=1000, #noC, noS)", 10)
+covResults("Slim_WF_N10000_sub1000_noCnoS_temp_cov_matrix_250kwin.csv", "WF neutral (N=10000, sub=1000)", 10)
+```
+
+![](../Output/COV/Sim/Slim_WF_N10000_sub1000_noCnoS_250kwin_neutral.png){width=70%}
+
+### WF neutral N=10000, sub=1000 with bias correction
+
+```{r}
+covResults2("Slim_WF_N10000_sub1000_wCwS_temp_cov_matrix_250kwin.csv", "WF neutral(N=10000, sub=1000) w/ correction", 10)
+```
+![](../Output/COV/Sim/Slim_WF_N10000_sub1000_wCwS_250kwin_neutral_noylim.png){width=70%}
+
+
+### WF neutral N=10000, sub=1000 (no bias correction, with standardization)
+
+```{r}
+covResults("Slim_WF_N10000_sub1000_noCwS_temp_cov_matrix_250kwin.csv", "WF neutral all (N=10000, sub=1000) noCwS", 10)
+
+```
+
+![](../Output/COV/Sim/Slim_WF_N10000_sub1000_noCwS_250kwin_neutral.png) {width=70%}
+
+```{r}
+covResults("Slim_WF_N10000_s100_noCwS_temp_cov_matrix_250kwin.csv", "WF neutral (N=10000, sub=100) noCwS", 10)
+
+```
+
+![](../Output/COV/Sim/Slim_WF_N10000_s100_noCwS_250kwin_neutral.png)
+```{r}
+covResults("Slim_nonWF_K10000_s100_noCnoS_temp_cov_matrix_250kwin.csv", "nonWF neutral (K=10000, sub=100) noCnoS", 10)
+
+```
+
+![](../Output/COV/Sim/Slim_nonWF_K10000_s100_noCnoS_250kwin_neutral.png)
+
+### Adding beneficial mutaiton
+
+```{r}
+covResults("Slim_WF_N1000_s100_noCnoS_Pos0.1_temp_cov_matrix_250kwin.csv", "WF with Positive muts(0.1) (N=1000, sub=100) noCnoS", 10)
+covResults("Slim_WF_N1000_s100_noCwS_Pos0.1_temp_cov_matrix_250kwin.csv", "WF with Positive muts(0.1) (N=1000, sub=100) noCwS", 10)
+
+```
+![](../Output/COV/Sim/Slim_WF_N1000_s100_noCnoS_Pos0.1_250kwin_neutral.png)
+![](../Output/COV/Sim/Slim_WF_N1000_s100_noCwS_Pos0.1_250kwin_neutral.png)
+
+
+
+
+```{r}
+covResults("Slim_WF_N1000_s100_noCwS_Pos0.2_g5000_temp_cov_matrix_250kwin.csv", "WF with Positive(0.2) (N=1000, sub=100) noCwS", 10)
+
+```
+![](../Output/COV/Sim/Slim_WF_N1000_s100_noCwS_Pos0.2_g5000_250kwin_neutral.png)
+
+
+
+![](../Output/COV/Sim/Slim_WF_N1000_s100_noCnoS_Pos0.5_250kwin_neutral.png) 
+
+![](../Output/COV/Sim/Slim_WF_N1000_s100_noCwS_Pos0.1_250kwin_neutral.png)
+
+```{r}
+covResults("Slim_WF_N1000_s100_wCnoS_Pos0.2_g5000_temp_cov_matrix_250kwin.csv", "WF with Positive(0.2) (N=1000, sub=100) noCnoS", 10)
+
+```
+![](../Output/COV/Sim/Slim_WF_N1000_s100_wCnoS_Pos0.2_g5000_250kwin_neutral.png)
+
+![](../Output/COV/Sim/Slim_WF_N1000_s100_wCwS_Pos0.2_g5000_250kwin_neutral.png)
+
+```{r}
+covResults("Slim_WF_N1000_s100_wCnoS_Pos0.2_g5000_temp_cov_matrix_250kwin.csv", "WF with Positive(0.2) (N=1000, sub=100) noCnoS", 10)
+
+```
+
+<br>
+
+## Actual data for 3 populations  
+
+![](../Output/COV/MD7000_Cov_overtime_CI_250k.window_new.png){width=60%}
+
+# Estiamte Ne from simulation results 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+require(data.table)
+require(boot)
+source("../Rscripts/calcNe.R")
+
+#AF data (using flip data)
+wf<-fread("~/Projects/pacherring_Vincent/slim/AF_WF_N10000_s100_flip.csv")
+nonwf<-fread("~/Projects/pacherring_Vincent/slim/AF_nonWF_K10000_s100.csv")
+setnames(wf, paste0("time",0:9))
+setnames(nonwf, paste0("time",0:9))
+
+comb<-data.frame(t1=paste0("time",0:8), t2=paste0("time",1:9))
+
+
+df <- df1[df2, .(chromo, position, freq1, freq2, nInd1, nInd2)][!is.na(freq1) & !is.na(freq2) & freq1 > 0.1 & freq2 > 0.1, ]
+    g=gens[i]
+    
+    estNe$Ne[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g)] 
+
+estNe<-data.frame(pop1=comb[,1], pop2=comb[,2])
+gens<-
+
+for (i in 1: nrow(comb)){
+    df1<-wf[,i:(i+1)]
+    df1<-apply(df1, 1, function(x) 1-x)
+    df1<-data.table(t(df1))
+    
+    df2<-nonwf[,i:(i+1)]
+    
+    setnames(df1, 1:2, c("freq1", "freq2"))
+    setnames(df2, 1:2, c("freq1", "freq2"))
+    
+    df1$nInd1<-100
+    df1$nInd2<-100
+    df2$nInd1<-100
+    df2$nInd2<-100
+    
+    df <- df1[freq1 > 0.1 & freq2 > 0.1,]
+    g=10
+    
+    df[, jrNe2(freq1, freq2, nInd1, nInd2, g)] 
+
+    
+    
+    estNe$Ne[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g)] 
+
+    # block bootstrapping across LGs
+    uq.ch <- df[, sort(unique(chromo))]
+
+    boot.re <- boot(uq.ch, jrNe2block, 1000, gen = g, alldata = df)
+    estNe$median[i]<-median(boot.re$t[is.finite(boot.re$t)]) # median bootstrap
+    estNe$mean[i]<-mean(boot.re$t[is.finite(boot.re$t)])
+    ci<-boot.ci(boot.re, type = c('perc'))
+    #95% C.I.
+    estNe$CI.low[i]<-ci$percent[4]
+    estNe$CI.up[i]<-ci$percent[5]
+    
+    #reset the attibutes
+    setnames(df1, c("freq1", 'nInd1'),c("knownEM", 'nInd'))
+    setnames(df2, c("freq2", 'nInd2'),c("knownEM", 'nInd'))
+}
+
+write.csv(estNe,"../Output/Ne/Jorde-Ryman_Ne.estimates_PWS.csv")
+
+#estNe<-read.csv("../Output/Ne/Jorde-Ryman_Ne.estimates_PWS.csv", row.names = 1)
+estNe$year<-apply(estNe["pop2"],1, function(x) {if (x=="96") x=1996
+                   else if (x=="07") x=2007
+                   else if (x=="17") x=2017})
+
+ggplot(estNe[c(1,4,6),], aes(x=year, y=Ne))+
+    geom_point(size=2, color="blue")+
+    geom_errorbar(aes(ymin = CI.low, ymax = CI.up), width = 0.2, color="blue")+
+    geom_path(color="blue")+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+ggtitle("PWS")
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates.png", width = 5, height = 3, dpi=300)
+
+
+```
+
+```{r}
+knitr::kable(estNe)
+```
+

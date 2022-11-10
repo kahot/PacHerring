@@ -1,0 +1,174 @@
+---
+title: "Fstruct"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(tidyverse)
+library(dplyr)
+library(cowplot)
+library(FSTruct)
+library(gridExtra)
+```
+
+
+# Plot FSTstruct results for each population
+
+**FSTruct** quantifies the variability of Q matrices
+(relative levels of variation in membership coefficients among the individuals belonging to two or more predefined groups).
+
+It is a **statistical method** to measure variability in membership coefficients inferred by model-based clustering and to compare this variability across populations. 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+
+pops<-c("PWS","TB","SS")
+qmat<-read.table(paste0("../Data/ngsadmix/Ph_pruned_maf05_k3.qopt"), header = F)
+colnames(qmat)<-c("q1","q2","q3")
+qmat<-cbind(pop_info[,c("Sample","Population.Year","Year.Collected", "pop")], qmat)
+
+div1<-diverging_hcl(6, palette="Blue-Red")
+seq1<-sequential_hcl(6, palette="Teal")
+cols3<-c('#8dd3c7','#ffffb3','#bebada')
+
+stats_plots<-list()
+for (i in 1: length(pops)){
+    samples<-qmat[qmat$pop==pops[i],]
+    years<-unique(samples$Year.Collected)
+    years<-years[order(years)]
+    
+    P<-list() #plots
+    Qs<-list() #Qmatrix
+    for (j in 1: length(years)){
+        df<-samples[samples$Year.Collected==years[j],]
+        q<-df[,c(1,2,5:7)]
+        colnames(q)[1:2]<-c("ind","pop")
+        #q$rep<-1
+        Qs[[j]]<-q
+        gtitle<-df$Population.Year[1]
+        P[[j]]<-Q_plot(Q = dplyr::arrange(q, q3),K=3)+ggplot2::ggtitle(gtitle)+
+            ggplot2::scale_fill_manual(values=cols3)+
+            ggplot2::scale_color_manual(values=cols3)
+            
+    }
+        
+    #calculate stats
+    bootstrap <- Q_bootstrap(matrices = Qs, 
+                             n_replicates = 100,
+                             K = 3, 
+                             seed = 1)
+    
+    
+    {png(paste0("../Output/fstruct/",pops[i],"_FSTruct.png"),width=length(years)*3, height=3, unit="in", res=300)
+    grid.arrange(grobs=P, top=pops[i], nrow=1)
+    dev.off()}
+
+    
+    stats_plots[[i]]<-cowplot::plot_grid(bootstrap$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2::scale_x_discrete(labels=years), 
+                       bootstrap$plot_violin + ggplot2::ggtitle("Violin Plot")+ggplot2::scale_x_discrete(labels=years), 
+                       bootstrap$plot_ecdf + ggplot2::ggtitle("ECDF Plot") +
+                           ggplot2::scale_color_brewer(palette = "Dark2", labels=years), 
+                       nrow = 2)
+}
+
+## copy and paste the following to save each figure
+png(paste0("Output/fstruct/PWS_stats.png"), width=10, height=7,, unit="in", res=300)
+stats_plots[[1]]
+dev.off()
+png(paste0("Output/fstruct/TB_stats.png"), width=10, height=7,, unit="in", res=300)
+stats_plots[[2]]
+dev.off()
+png(paste0("Output/fstruct/SS_stats.png"), width=10, height=7,, unit="in", res=300)
+stats_plots[[3]]
+dev.off()
+```
+![](../Output/fstruct/PWS_FSTruct.png)
+
+## Plot all populations together
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+allpops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+
+Qs<-list() #Qmatrix
+for (i in 1: length(allpops)){
+    df<-qmat[qmat$Population.Year==allpops[i],]
+    q<-df[,c(1,2,5:7)]
+    colnames(q)[1:2]<-c("ind","pop")
+    Qs[[i]]<-q
+    names(Qs)[i]<-allpops[i]
+}        
+
+qmat2<-qmat[,c(1,2,5:7)] 
+colnames(qmat2)<-c("ind","pop","q1","q2","q3")
+qmat2$pop<-factor(qmat2$pop, levels=allpops)
+qmat2<-qmat2[order(qmat2$pop),]
+
+qmat_sorted<-data.frame()
+for (i in 1:length(allpops)){
+    df<-qmat2[qmat2$pop==allpops[i],]
+    df<-df[order(df$q3),]
+    qmat_sorted<-rbind(qmat_sorted, df)
+}
+
+
+
+nind<-data.frame(pop=allpops)
+nind$n[1]<-nrow(qmat2[qmat2$pop==allpops[1],])
+nind$mid[1]<-nind$n[1]/2
+for(i in 2:length(allpops)){
+    no<-nrow(qmat2[qmat2$pop==allpops[i],])
+    nind$n[i]<-nind$n[i-1]+no
+    nind$mid[i]<-nind$n[i-1]+no/2
+    
+}
+
+
+Q_plot(Q = qmat_sorted,,K=3)+
+            ggplot2::scale_fill_manual(values=cols3)+
+            ggplot2::scale_color_manual(values=cols3)+
+    #ggplot2::geom_vline(xintercept = nind$n[1:13]+0.5, color="gray", size=0.3)+
+
+    ggplot2::scale_x_continuous(labels=allpops, breaks=nind$mid)+
+    theme_minimal()+xlab('')+ylab('')+ylim(0,1)+
+    theme(panel.grid=element_blank(), legend.position = "none", axis.text.x = element_text(size=8))+
+    ggplot2::annotate('segment', x=nind$n[1:13]+0.5,y=rep(0, times=13),yend=rep(1, times=13), xend=nind$n[1:13]+0.5, color="gray30", size=0.3)
+ggsave('../Output/fstruct/Allpop_FSTruct_plot2.png', width = 8, height = 3.5, dpi=300)
+
+ #calculate stats
+# remove TB pops
+bootstrap <- Q_bootstrap(matrices = Qs[5:14], 
+                             n_replicates = 100,
+                             K = 3, 
+                             seed = 1)
+png("Output/fstruct/Allpops_stats_noTB.png", width=10, height=7, unit='in', res=300)
+cowplot::plot_grid(bootstrap$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2::scale_x_discrete(labels=allpops[5:14]), 
+                       bootstrap$plot_violin + ggplot2::ggtitle("Violin Plot")+ggplot2::scale_x_discrete(labels=allpops[5:14]), 
+                       bootstrap$plot_ecdf + ggplot2::ggtitle("ECDF Plot") +
+                           ggplot2::scale_color_brewer(palette = "Dark2", labels=allpops[5:14]), 
+                       nrow = 2)
+dev.off()
+```
+![](../Output/fstruct/Allpop_FSTruct_plot2.png)
+
+
+![](../Output/fstruct/Allpops_stats_noTB.png)
+
+* TB is excluded as it is mostly consisted of 1 pedigree, and the numbers comes out weird.
+
+* CA population has the highest ancestry variability. 
+* Sitka Sound population is more stable over time than PWS. PWS population appeared to have gone through fluctuations 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+```
+
+

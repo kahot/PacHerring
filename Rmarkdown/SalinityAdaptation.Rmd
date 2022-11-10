@@ -1,0 +1,350 @@
+---
+title: "Salinity Adaptation"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: false
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+date: "07/05/2022"
+
+---
+
+## Explore salinity adaptation  
+
+### Suggested adaptive loci to low salinity (Baltic Sea) from Han et al. (2020)
+
+```{r eval=FALSE, eval=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+
+sa<-read.csv("../Data/han_SI_salinity_snp.csv")
+table(sa$CHR)
+# 1   2   4   6   7   8   9  10  12  13  16  17  18  22  24  26 
+#50 162 189   5  14   5  23 312 411  33 129 557 388  14   5   6 
+
+# chr1, 2, 4, 10,12, 16,17,18 have many loci
+
+saS<-sa[,c("CHR","POS","log10P.Spring..raw.")]
+
+ggplot()+
+    geom_point(data=sa,aes(x=POS, y=log10P.Spring..raw.,color="gray50"), size=.6)+
+    geom_point(data=sa,aes(x=POS, y=log10P.Autumn..raw.,color="steelblue",),color="steelblue", size=0.6)+
+    facet_wrap(~CHR)+xlab('')+
+    scale_colour_manual(values=c(Spring_spawner="gray50", Autumn_spawner="steelblue"))+
+    theme_bw()+ylab("Log10(P)")+
+    theme(legend.title = element_blank())
+ggsave("../Output/Salinity/Han_Salinity_adaptiveLoci_inAtlanticHerring.png", width = 8, height = 6, dpi=300)
+
+```
+![](../Output/Salinity/Han_Salinity_adaptiveLoci_inAtlanticHerring.png)  
+
+### Fst contrast between CA and other regions 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#pull out the Fst info for CA vs. other populations
+fst17<-read.csv("../Output/SFS/Fst_window_year2017_combined.csv", row.names = 1)
+
+ca<-fst17[,c(1:3,grep("CA", colnames(fst17)))]
+
+ca$ch<-as.integer(gsub("chr","",ca$chr))
+ca<-ca[order(ca$ch, ca$midPos),]
+
+ca$chr<-factor(ca$chr, levels=paste0("chr",1:26))
+
+plots<-list()
+for (i in 1:5){
+    fs<-gsub("Fst_","",colnames(ca)[i+3])
+    pops <- unlist(strsplit(fs, "\\."))
+    plots[[i]] <- ggplot(ca, aes_string(x = 'midPos', y = paste0(colnames(ca)[i+3]))) + 
+        geom_point(size = 1, color = "gray",alpha = 0.4, shape = 1)+
+        theme_minimal()+
+        theme(axis.text.x=element_blank())+
+        ylab("Fst\n")+ xlab("")+ ylim(0,0.85)+
+        ggtitle(paste0(pops[1]," vs.", pops[2]))+
+        geom_line(color="steelblue", size=0.2)+
+        facet_wrap(~chr, ncol = 9)
+}
+
+{png(paste0("../Output/SFS/CA_Fst.png"), height = 20, width = 20, res=150, units = "in")
+do.call(grid.arrange, c(plots, ncol=2))
+dev.off()}
+```
+![](../Output/SFS/CA_Fst.png)
+
+### Select the chromosome of interests only  
+
+* chr1,2,4,6,7,8,9,10,12,13,16,17,18,22,24,26
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+ca2<-ca[ca$ch %in% c(1,2,4,6,7,8,9,10,12,13,16,17,18,22,24,26),]
+plots2<-list()
+for (i in 1:5){ 
+    fs<-gsub("Fst_","",colnames(ca2)[i+3])
+    pops <- unlist(strsplit(fs, "\\."))
+    # Fst with actual line to highlight the differences
+    plots2[[i]] <- ggplot(ca2, aes_string(x = 'midPos', y = paste0(colnames(ca2)[i+3]))) + 
+        geom_point(size = 1, color = "gray",alpha = 0.4, shape = 1)+
+        theme_minimal()+
+        theme(axis.text.x=element_blank())+
+        ylab("Fst\n")+ xlab("")+ ylim(0,0.85)+
+        ggtitle(paste0(pops[1]," vs.", pops[2]))+
+        geom_line(color="steelblue", size=0.2)+
+        facet_wrap(~chr, ncol =4)
+}
+{png(paste0("../Output/SFS/CA_Fst_salinity_chr.png"), height = 20, width = 20, res=300, units = "in")
+do.call(grid.arrange, c(plots2, ncol=2))
+dev.off()}
+```
+![](../Output/SFS/CA_Fst_salinity_chr.png)
+
+### Look at AF from VCF files in CA17 
+
+```{bash eval=FALSE}
+#run vcftools to get AF info
+#(getAF_eachPop.sh)
+vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/population/CA17_maf05.vcf.gz --freq --out  /home/ktist/ph/data/new_vcf/MD7000/population/AF/CA17_maf05_af 
+
+```
+
+#### Plot the freq near adaptive loci 
+* SNPs within the identified salinity adaptive loci +-25000 bases  
+* Plot the MAFs (Minior allele freq.)  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+
+af<-read.table("../Data/new_vcf/AF/CA17_maf05_af.frq",skip=1, col.names = c("chr","pos","n_allele","n_sample","MajorAF","MAF"))
+
+af$maf<-as.numeric(substr(af$MAF, 3,10))
+af$maj<-as.numeric(substr(af$MajorAF, 3,10))
+
+chromosomes<-unique(sa$CHR)
+saloci<-data.frame()
+for (i in 1:length(chromosomes)){
+    snp<-sa[sa$CHR==chromosomes[i],]
+    snp$range1<-snp$POS-25000
+    snp$range2<-snp$POS+25000
+    #range vector
+    range<-c()
+    for(j in 1:nrow(snp)){
+         range<-c(range, seq(snp$range1[j], snp$range2[j], by=1))
+    }
+
+    af2<-af[af$chr==paste0("chr",chromosomes[i]),]
+    ovlp<-af2[af2$pos %in% range, ]
+    saloci<-rbind(saloci, ovlp)
+}
+write.csv(saloci, "../Output/Salinity/Salinity_adaptive_snps_CA17.csv")
+#saloci<-read.csv("../Output/Salinity/Salinity_adaptive_snps_CA17.csv", row.names = 1)
+
+# look at MAF of loci near the adaptive snps identified as salinity tolerant
+saloci$chr<-factor(saloci$chr, levels=paste0("chr", chromosomes))
+ggplot(saloci, aes(x=pos,y=maf))+
+    geom_point(size=0.5, color="blue", alpha=0.5)+
+    facet_wrap(~chr)+
+    theme_bw()+ggtitle("CA")
+ggsave("../Output/Salinity/CA_salinity_adaptiveLoci.png", width = 8, height = 5.5, dpi=300)
+```
+![](../Output/Salinity/CA_salinity_adaptiveLoci.png)
+
+### Look at the frequencies in all other 2017 populations
+
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+#Look at the freq for all other 2017 populations
+pops<-c("PWS17","SS17","TB17","BC17","WA17")
+
+for (p in 1:length(pops)){
+    af1<-read.table(paste0("../Data/new_vcf/AF/",pops[p], "_maf05_af.frq"),skip=1, col.names=c("chr","pos","n_allele","n_sample","MajorAF","MAF"))
+    af1$maf<-as.numeric(substr(af1$MAF, 3,10))
+    af1$maj<-as.numeric(substr(af1$MajorAF, 3,10))
+    
+    df<-data.frame()
+    for (i in 1:length(chromosomes)){
+        loci<-saloci$pos[saloci$chr==paste0("chr", chromosomes[i])]
+        ovlp<-af1[af1$chr==paste0("chr",chromosomes[i]) & af1$pos %in% loci,]
+        df<-rbind(df, ovlp)
+    }
+    
+    assign(paste0(pops[p]) ,df)
+    #write.csv(df, paste0("../Output/Salinity/Salinity_adaptive_snps_", pops[p],".csv"))
+}
+
+#Plot different populations    
+PWS17$chr<-factor(PWS17$chr, levels=paste0("chr", chromosomes))
+ggplot(PWS17, aes(x=pos,y=maf))+
+    geom_point(size=0.5, color="blue", alpha=0.5)+
+    facet_wrap(~chr)+
+    theme_bw()+ggtitle("PWS")
+ggsave("../Output/PWS17_salinity_adaptiveLoci.png", width = 8, height = 5.5, dpi=300)
+```
+![](../Output/PWS17_salinity_adaptiveLoci.png)
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+#Plot different populations    
+WA17$chr<-factor(WA17$chr, levels=paste0("chr", chromosomes))
+ggplot(WA17, aes(x=pos,y=maf))+
+    geom_point(size=0.5, color="blue", alpha=0.5)+
+    facet_wrap(~chr)+
+    theme_bw()+ggtitle("WA")
+ggsave("../Output/WA17_salinity_adaptiveLoci.png", width = 10, height = 7, dpi=300)
+```
+![](../Output/WA17_salinity_adaptiveLoci.png)
+* **All look similar**
+
+### Run Chi-square test bewteen populations to test if AF differ
+
+```{r eval=FALSE, warning=FALSE, include=FALSE}
+#run chi square test between the population
+popsize<-c(56,64,72,64,72)
+CA<-saloci
+
+for (p in 1 : length(pops)){
+    df<-get(pops[p])
+    n<-popsize[p]
+    
+    chi.results<-CA[,1:2]
+    chi.results2<-CA[,1:2] #simulated p-values
+    for (i in 1: nrow(CA)){
+        mat<-as.table(rbind(c(round(CA$maj[i]*70),round(CA$maf[i]*70)),c(round(df$maj[i]*n),round(df$maf[i]*n))))
+        dimnames(mat)<-list(pop=c("CA17", pops[p]), allele=c("Ref","Alt"))
+
+        xsq<-chisq.test(mat)
+        chi.results$rawP[i]<-xsq$p.value
+        xsq2<-chisq.test(mat,simulate.p.value = TRUE, B = 2000)
+        chi.results2$rawP[i]<-xsq2$p.value
+    }
+    
+    write.csv(chi.results, paste0("../Output/Salinity/Chi.test_CA.vs",pops[p],".csv"))
+    write.csv(chi.results2, paste0("../Output/Salinity/Chi.test_CA.vs",pops[p],".simP.csv"))
+    
+    ggplot(chi.results, aes(x=pos, y=-log10(rawP)))+
+        geom_point(size=0.5, color="red", alpha=0.5)+xlab('')+
+        facet_wrap(~chr)+theme_bw()+ggtitle(paste0("CA vs.", gsub("17",'',pops[p])))+
+        geom_hline(yintercept = 5, color="gray", size=0.3)
+    ggsave(paste0("../Output/Salinity/Chi.test_CA.vs.",pops[p],".png"), width = 8, height = 5, dpi =200)
+}
+```
+
+![](../Output/Salinity/Chi.test_CA.vs.WA17.png){width=45%} ![](../Output/Salinity/Chi.test_CA.vs.BC17.png){width=45%}
+
+![](../Output/Salinity/Chi.test_CA.vs.SS17.png){width=45%}![](../Output/Salinity/Chi.test_CA.vs.PWS17.png){width=45%}
+
+![](../Output/Salinity/Chi.test_CA.vs.TB17.png){width=45%}
+
+
+### Are alternate frequencies higher (maf) in 'Salinity Adaptive SNPs' in CA, compared to other populations? 
+
+```{r eval=FALSE, warning=FALSE,message=FALSE}
+af$color<-"A"
+af$color[af$maf>0.5]<-"B"
+
+ggplot(af, aes(x=pos,y=maf, color=color))+
+    geom_point(size=0.2)+
+    scale_color_manual(values=c("gray75", "blue"))+
+    facet_wrap(~chr)+
+    theme_bw()+ggtitle("CA")
+ggsave("../Output/Salinity/CA_MAF_plot_all_chromosomes.png", width = 8, height = 8, dpi=300)
+
+# Proportion of maf over 0.5 (alternate higher than reference) in CA pop
+nrow(af[af$maf>0.5,]) # 19264
+nrow(af[af$maf>0.5,])/nrow(af) #0.05829062 
+#salinity adaptive loci
+nrow(saloci[saloci$maf>0.5,])/nrow(saloci) #0.1474945 much higher
+
+
+#sites without the salinity-adaptive loci (the ratio does not change much from all sites above)
+saloci$id<-paste0(saloci$chr,".",saloci$pos)
+af$id<-paste0(af$chr,".",af$pos)
+af2<-af[!(af$id %in% saloci$id),]
+nrow(af2[af2$maf>0.5,])/nrow(af2) #0.05742586
+
+## Compare with other population
+nrow(PWS17[PWS17$maf>0.5,])/nrow(PWS17) #0.03277655
+prop<-data.frame(pop=pops)
+for (i in 1:length(pops)){
+    df<-get(pops[i])
+    prop$maf_over0.5_prop[i]<-nrow(df[df$maf>0.5,])/nrow(df)
+}
+prop<-rbind(prop, c("CA17", nrow(saloci[saloci$maf>0.5,])/nrow(saloci)))
+prop$maf_over0.5_prop<-as.numeric(prop$maf_over0.5_prop)
+prop
+#    pop maf_over0.5_prop
+#1 PWS17       0.03277655
+#2  SS17       0.03561298
+#3  TB17       0.03057044
+#4  BC17       0.04034037
+#5  WA17       0.03592814
+#6  CA17       0.14749448
+
+
+ggplot(prop, aes(x=pop, y=maf_over0.5_prop))+
+    geom_bar(stat="identity")+ylab("Proportion of MAF > 0.5 in Salinity Adaptive Loci")
+ggsave("../Output/Salinity/Proportion.MAF.over0.5.in.Salinity.Adaptive.Loci.png", width = 5, height = 4, dpi=300)
+```
+![](../Output/Salinity/Proportion.MAF.over0.5.in.Salinity.Adaptive.Loci.png)
+
+* CA has a higher proportion of salinity adaptive loci with allele freq. >0.5
+* Is this due to inversion in chr12?  
+* Remove loci within Chr12 inversion
+
+```{r eval=FALSE, warning=FALSE,message=FALSE}
+af$color<-"A"
+
+#Is it due to inversion?
+#remove the inversion region? (remove chr12)
+prop2<-data.frame(pop=pops)
+for (i in 1:length(pops)){
+    df<-get(pops[i])
+    df<-df[df$chr!="chr12",]
+    prop2$maf_over0.5_prop[i]<-nrow(df[df$maf>0.5,])/nrow(df)
+}
+prop2<-rbind(prop2, c("CA17", nrow(saloci[saloci$maf>0.5&saloci$chr!="chr12",])/nrow(saloci[saloci$chr!="chr12",])))
+prop2$maf_over0.5_prop<-as.numeric(prop2$maf_over0.5_prop)
+prop2
+#    pop maf_over0.5_prop
+#1 PWS17       0.03789224
+#2  SS17       0.04026051
+#3  TB17       0.03907638
+#4  BC17       0.04440497
+#5  WA17       0.03907638
+#6  CA17       0.04677324
+#the difference disappers by removing chr12 (inversion)
+
+ggplot(prop2, aes(x=pop, y=maf_over0.5_prop))+
+    geom_bar(stat="identity")+ylab("Proportion of MAF > 0.5 (no Chr12 Inv)")
+ggsave("../Output/Salinity/Proportion.MAF.over0.5.in.Salinity.Adaptive.Loci_withoutChr12Inv.png", width = 5, height = 4, dpi=300)
+
+
+```
+
+![](../Output/Salinity/Proportion.MAF.over0.5.in.Salinity.Adaptive.Loci_withoutChr12Inv.png)  
+
+
+### look at chr1, chr4, chr10, and chr16 separately
+```{r eval=FALSE, warning=FALSE,message=FALSE}
+pops2<-c(pops,"CA17")
+CA17<-saloci
+
+prop3<-data.frame(pop=pops2)
+for (i in 1:length(pops2)){
+    df<-get(pops2[i])
+    df1<-df[df$chr=="chr1",]
+    prop3$chr1[i]<-nrow(df1[df1$maf>0.5,])/nrow(df1)
+    df1<-df[df$chr=="chr4",]
+    prop3$chr4[i]<-nrow(df1[df1$maf>0.5,])/nrow(df1)
+    df1<-df[df$chr=="chr10",]
+    prop3$chr10[i]<-nrow(df1[df1$maf>0.5,])/nrow(df1)
+    df1<-df[df$chr=="chr16",]
+    prop3$chr16[i]<-nrow(df1[df1$maf>0.5,])/nrow(df1)
+}
+
+prop3m<-melt(prop3, id.vars="pop")
+ggplot(prop3m, aes(x=variable, y=value, color=pop))+
+    geom_point(position=position_dodge(width = 0.5), size=3)+
+    geom_vline(xintercept = c(1.5,2.5,3.5), color="gray",size=0.5)+
+    theme_bw()+ylab("Proportion of AF >0.5")+xlab("")+theme(legend.title = element_blank())+
+    theme(panel.grid.major.x = element_blank())
+ggsave("../Output/Salinity/PropAFover0.5.in.allPops.ch4.10.16.png", width=7, height=4, dpi=300 )    
+```
+![](../Output/Salinity/PropAFover0.5.in.allPops.ch4.10.16.png)
+

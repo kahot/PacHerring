@@ -1,0 +1,424 @@
+---
+title: "Copy Number Variants"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(gridExtra)
+library(zoo)
+library(data.table)
+library(toolboxH)
+library(scattermore)
+```
+
+
+# Look for ahr pathway genes
+
+## Create bed files for genes ± 250,000 bases
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+geneset<-read.csv("../Output/ahR/ahRpathway_geneset.csv", row.names = 1)
+# 'arntl2 (chr3)'is written as  arntl2_a (ARNTL2 (chr16) is saved as arntl2)
+
+#create bed files for the genes in the genest
+for (i in 1:nrow(geneset)){
+    st<-geneset$start[i]-250000
+    en<-geneset$end[i]+250000
+    df<-data.frame(chr=geneset$chr[i], st=st,end=en)
+    write.table(df, paste0("../Output/CNV/ahr/bed/",geneset$gene_name[i],".bed"), row.names = F, col.names = F, quote=F, sep="\t")
+}
+ 
+```
+
+
+## Create slurm scripts to extract depth from each bam file  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Run samptools to extract read depth from individual bam files
+#Create a slurm script file
+
+pops_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+
+bfiles<-list.files("../Output/CNV/ahr/bed/", pattern = ".bed")
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+
+for (p in 1:4){
+    bams<-pops_info$Sample[pops_info$Population.Year==pops[p]]
+    
+    sink(paste0("../Data/Slurmscripts/extractDepth_fromBam",p,".v2.sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=Depth",p," \n"))
+    cat("#SBATCH --mem=16G
+    #SBATCH --ntasks=8
+    #SBATCH --nodes=4 \n")
+    cat(paste0("#SBATCH --error Depth",p,".err\n"))
+    cat("#SBATCH --time=24:00:00
+    #SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+    #SBATCH --mail-type=ALL
+    #SBATCH -p high \n")
+    cat("\n")
+    cat("module load samtools\n\n")
+
+    for (i in 1: length(bfiles)){
+        for(j in 1: length(bams)){
+            cat(paste0("samtools depth -b /home/ktist/ph/data/bam_depth/", bfiles[i]," /home/eoziolor/phpopg/data/align/", bams[j], ".bam > /home/ktist/ph/data/bam_depth/", gsub(".bed","", bfiles[i]),".",bams[j],".txt \n" ))
+            cat(paste0("gzip /home/ktist/ph/data/bam_depth/", gsub(".bed","", bfiles[i]),".",bams[j],".txt \n" ))
+        }
+    }  
+    sink(NULL)
+}
+```
+
+
+## Plot the results for each gene     
+* Read each individual files and create a population summary file in /summary/ directory.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+geneset<-read.csv("../Output/ahR/ahRpathway_geneset.csv", row.names = 1)
+
+#check all files are transferred
+sum<-data.frame(gene=geneset$gene_name)
+for (i in 1:nrow(geneset)){
+    files<-list.files("../Output/CNV/ahr/depth_files/", paste0(pattern=geneset$gene_name[i],"."))
+    sum$count[i]<-length(files)
+}
+
+# Combine all individulas into one file per population
+for (g in 1:nrow(geneset)){
+    gene<-geneset$gene_name[g]
+    for (p in 1:length(pops)){
+        samples<-pops_info$Sample[pops_info$Population.Year==pops[p]]
+        depths<-data.frame()
+        for (i in 1:length(samples)){
+            # Read directly from the externatl drive
+            df<-fread(paste0("/Volumes/Kaho_Data/PacHerring/Output/CNV/ahr/depth_files/",gene,".",samples[i],".txt.gz"))
+            #df<-fread(paste0("../Output/CNV/ahr/depth_files/",gene,".",samples[i],".txt.gz"))
+            df$sample<-samples[i]
+            depths<-rbind(depths,df)
+        }
+        fwrite(depths,paste0("../Output/CNV/ahr/summary/",gene,".",pops[p], '.csv.gz'))
+    }
+}
+```
+
+
+* Read the depth summary files and create plots  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+geneset<-read.csv("../Output/ahR/ahRpathway_geneset.csv", row.names = 1)
+pops_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+
+## PWS files
+
+#1. Use "Scattermore" library to create rasterize plots faster
+for (g in 1:nrow(geneset)){
+    gene<-geneset$gene_name[g]
+    start<-geneset$start[g]
+    end<-geneset$end[g]
+    
+    for (p in 1:length(pops)){
+        samples<-pops_info$Sample[pops_info$Population.Year==pops[p]]
+        depths<-fread(paste0("../Output/CNV/ahr/summary/",gene,".", pops[p],".csv.gz"))
+        depths<-depths[,-1]
+
+        plots<-list()
+        for (i in 1:length(samples)){
+            df<-depths[depths$sample==samples[i],]
+            plots[[i]]<-ggplot()+
+                geom_scattermost(df[,c("V2","V3")], col="blue", pointsize=2)+
+                 ylab("Read depth")+xlab("")+theme_bw()+
+                 ylim(0,30)+
+                 ggtitle(paste(samples[i], gene))+
+                geom_vline(xintercept = start, color="gray70", size=0.3)+
+                geom_vline(xintercept = end, color="gray70", size=0.3)+
+                theme(axis.text.x = element_text(angle = 45, hjust=1))
+        }
+                
+        {png(paste0("../Output/CNV/ahr/summary/", gene,"_",pops[p],".png"), width =25, length(samples)/5*2, unit="in", res=300)
+    do.call(grid.arrange, c(plots, ncol=5))
+    dev.off() } 
+    }
+}
+ 
+
+
+## 2. Use ggplot to create more detailed plots       
+for (g in 1:nrow(geneset)){
+    gene<-geneset$gene_name[g]
+    start<-geneset$start[g]
+    end<-geneset$end[g]
+    for (p in 1:length(pops)){
+        depths<-fread(paste0("../Output/CNV/ahr/summary/",gene,".", pops[p],".csv.gz"))
+        depths<-depths[,-1]
+        
+        ggsave(paste0("../Output/CNV/ahr/summary/", gene,"_",pops[p],".original.png"), width =25  ,height=length(samples)/5*2 ,dpi=300, 
+            ggplot(depths, aes(x=V2, y=V3))+
+            facet_wrap(~sample, ncol=5)+
+            geom_point(shape=".",  alpha=0.3, color="blue")+
+            ylab("Read depth")+xlab("position")+theme_bw()+
+            #ylim(0,ymax)+
+            ggtitle(paste(pops[p], gene))+
+            geom_vline(xintercept = start, color="gray70", size=0.3)+
+            geom_vline(xintercept = end, color="gray70", size=0.3)+
+            theme(axis.text.x = element_text(angle = 90, hjust=1)))
+        
+    }
+}
+
+```
+
+* Near ahr1b in PWS91 (displaying only several individuals. /summary/ directory has plots with all individulas):  
+![](../Output/CNV/ahr/ahr1b_PWS91.png)
+![](../Output/CNV/ahr/ahr1b_PWS07.png)
+
+
+## Compare other populations besides PWS for comparison
+
+* ahr1b & igfbp1a
+* arntl2_a (chr3)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#ahr1b in other populations
+pops_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+popyr<-unique(pops_info$Population.Year)
+popyr1<-popyr[!grepl("PWS", popyr)]
+
+geneset<-read.csv("../Output/ahR/ahRpathway_geneset.csv", row.names = 1)
+bfiles<-list.files("../Output/CNV/ahr/bed/", pattern = ".bed")
+
+
+# Create slurm scripts for genes of interest
+for (i in 1: c(1,11,20)){
+    gene<-gsub(".bed","", bfiles[i])
+    for (p in 1:length(popyr1)){
+        bams<-pops_info$Sample[pops_info$Population.Year==popyr1[p]]
+    
+        sink(paste0("../Data/Slurmscripts/extractDp_fromBam.",gene,".",popyr1[p],".sh"))
+        cat("#!/bin/bash -l\n\n")
+        cat(paste0("#SBATCH --job-name=",gene,popyr1[p]," \n"))
+        cat("#SBATCH --mem=16G
+        #SBATCH --ntasks=8
+        #SBATCH --nodes=4 \n")
+        cat(paste0("#SBATCH --error Depth",gene,popyr1[p],".err\n"))
+        cat("#SBATCH --time=24:00:00
+        #SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+        #SBATCH --mail-type=ALL
+        #SBATCH -p high \n")
+        cat("\n")
+        cat("module load samtools\n\n")
+    
+        for(j in 1: length(bams)){
+            cat(paste0("samtools depth -b /home/ktist/ph/data/bam_depth/", bfiles[i]," /home/eoziolor/phpopg/data/align/", bams[j], ".bam > /home/ktist/ph/data/bam_depth/", gsub(".bed","", bfiles[i]),".",bams[j],".txt \n" ))
+        }
+        for(j in 1: length(bams)){
+            cat(paste0("gzip /home/ktist/ph/data/bam_depth/", gsub(".bed","", bfiles[i]),".",bams[j],".txt \n" ))
+        }
+        sink(NULL)
+    }  
+    
+}
+
+```
+
+#### ahr1b
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+### Other populations
+popyr1 #[1] "BC17" "CA17" "SS06" "SS17" "SS96" "TB06" "TB17" "TB91" "TB96" "WA17"
+
+#ahr1b
+sum<-data.frame(pop=popyr1)
+for (i in 1:nrow(sum)){
+    files<-list.files("../Output/CNV/ahr/depth_files/ahr1b/", paste0(pattern=popyr1[i]))
+    sum$count[i]<-length(files)
+}
+
+gene<-geneset$gene_name[1]
+start<-geneset$start[1]
+end<-geneset$end[1]
+
+for (p in c(1,7,10)){
+    samples<-pops_info$Sample[pops_info$Population.Year==popyr1[p]]
+    depths<-data.frame()
+    for (i in 1:length(samples)){
+        # Read directly from the externatl drive
+        df<-fread(paste0("/Volumes/Kaho_Data/PacHerring/Output/CNV/ahr/depth_files/",gene,".",samples[i],".txt.gz"))
+        df$sample<-samples[i]
+        depths<-rbind(depths,df)
+    }
+    fwrite(depths,paste0("../Output/CNV/ahr/summary/",gene,".",popyr1[p], '.csv.gz'))
+    }
+}
+
+# Create plots (ggplot)
+for (p in c(1,7,10)){    
+    depths<-fread(paste0("../Output/CNV/ahr/summary/",gene,".", popyr1[p],".csv.gz"))
+    depths<-depths[,-1]
+        
+    ggsave(paste0("../Output/CNV/ahr/summary/", gene,"_",popyr1[p],".original.png"),width =25,height=length(samples)/5*2,dpi=300, 
+        ggplot(depths, aes(x=V2, y=V3))+
+        facet_wrap(~sample, ncol=5)+
+        geom_point(shape=".",  alpha=0.3, color="blue")+
+        ylab("Read depth")+xlab("position")+theme_bw()+
+        ylim(0,30)+
+        ggtitle(paste(popyr1[p], gene))+
+        geom_vline(xintercept = start, color="gray70", size=0.3)+
+        geom_vline(xintercept = end, color="gray70", size=0.3)+
+        theme(axis.text.x = element_text(angle = 90, hjust=1)))
+}
+```
+
+![](../Output/CNV/ahr/summary/ahr1b_BC17_small.png)
+
+![](../Output/CNV/ahr/summary/ahr1b_TB17_small.png)
+
+
+#### igfbp1a  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+# igfbp1a
+gene<-geneset$gene_name[18]
+start<-geneset$start[18]
+end<-geneset$end[18]
+
+#1 file (0545_CA17) is missing from CA17 pop
+cas<-list.files("/Volumes/Kaho_Data/PacHerring/Output/CNV/ahr/depth_files/", pattern="^igfbp1a.+CA17.txt.gz")
+depths<-data.frame()
+    for (i in 1:length(cas)){
+        # Read directly from the externatl drive
+        df<-fread(paste0("/Volumes/Kaho_Data/PacHerring/Output/CNV/ahr/depth_files/",cas[i]))
+        sample<-gsub("igfbp1a.",'',cas[i])
+        sample<-gsub(".txt.gz", '', sample)
+        df$sample<-sample
+        depths<-rbind(depths,df)
+    }
+fwrite(depths,paste0("../Output/CNV/ahr/summary/",gene,".CA17.csv.gz"))
+
+for (p in c(1,2,7)){
+    samples<-pops_info$Sample[pops_info$Population.Year==popyr1[p]]
+    depths<-data.frame()
+    for (i in 1:length(samples)){
+        # Read directly from the externatl drive
+        df<-fread(paste0("/Volumes/Kaho_Data/PacHerring/Output/CNV/ahr/depth_files/",gene,".",samples[i],".txt.gz"))
+        df$sample<-samples[i]
+        depths<-rbind(depths,df)
+    }
+    fwrite(depths,paste0("../Output/CNV/ahr/summary/",gene,".",popyr1[p], '.csv.gz'))
+    }
+}
+
+# Create plots (ggplot)
+for (p in c(2,7)){    
+    depths<-fread(paste0("../Output/CNV/ahr/summary/",gene,".", popyr1[p],".csv.gz"))
+    depths<-depths[,-1]
+        
+    ggsave(paste0("../Output/CNV/ahr/summary/", gene,"_",popyr1[p],".png"),width =25,height=length(samples)/5*2,dpi=300, 
+        ggplot(depths, aes(x=V2, y=V3))+
+        facet_wrap(~sample, ncol=5)+
+        geom_point(shape=".",  alpha=0.3, color="blue")+
+        ylab("Read depth")+xlab("position")+theme_bw()+
+        ylim(0,30)+
+        ggtitle(paste(popyr1[p], gene))+
+        geom_vline(xintercept = start, color="gray70", size=0.3)+
+        geom_vline(xintercept = end, color="gray70", size=0.3)+
+        theme(axis.text.x = element_text(angle = 90, hjust=1)))
+}
+
+```
+![](../Output/CNV/ahr/summary/igfbp1a_PWS07_small.png)
+
+
+![](../Output/CNV/ahr/summary/igfbp1a_CA17_small.png)
+
+![](../Output/CNV/ahr/summary/igfbp1a_TB17_small.png)
+
+
+## What genes are in Chr10 9633000 - 9638500 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Add track type=bedGraph to the first line of a bed file
+
+# Create a vcf file for the region 
+vcftools --gzvcf Data/new_vcf/PWSonly/PWSonly_NS0.5_maf01.vcf.gz --bed Output/CNV/ahr/bed/igfbp1a_vcf.bed --out Output/CNV/ahr/chr10_igfbp1a_region --recode --keep-INFO-all
+
+#create a bash script to run snpEff
+sink("~/programs/snpEff/runsnpEff_cnv1.sh")
+cat("#!/bin/bash \n\n")
+cat(paste0("java -Xmx8g -jar snpEff.jar Ch_v2.0.2.99 ~/Projects/PacHerring/Output/CNV/ahr/chr10_igfbp1a_region.recode.vcf -stats ~/Projects/PacHerring/Output/CNV/ahr/chr10_igfbp1a_region.html >  ~/Projects/PacHerring/Output/CNV/ahr/Anno.chr10_igfbp1a_region.vcf \n"))
+    
+    #extract the annotation information
+    cat(paste0("bcftools query -f '%CHROM %POS %INFO/AF %INFO/ANN\\n' ~/Projects/PacHerring/Output/CNV/ahr/Anno.chr10_igfbp1a_region.vcf > ~/Projects/PacHerring/Output/CNV/ahr/Anno.chr10_igfbp1a_region_annotation \n\n"))
+sink(NULL)  
+
+
+# chr10 9637043 0.0261011 A|upstream_gene_variant|MODIFIER|Metazoa_SRP|ENSCHAG00000024641|transcript|ENSCHAT00000058546.1|misc_RNA||n.-782C>A|||||782|
+
+# Metazoan signal recognition particle RNA 
+# https://www.genecards.org/cgi-bin/carddisp.pl?gene=ENSG00000273979
+```
+
+* 1 SNP in the region: Metazoan signal recognition particle RNA  
+https://www.genecards.org/cgi-bin/carddisp.pl?gene=ENSG00000273979
+
+
+
+
+#### arntl2 (chr3, arntl2_a)  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# arntl2_a
+gene<-geneset$gene_name[9]
+start<-geneset$start[9]
+end<-geneset$end[9]
+
+#list of sample files
+for (p in c(1,2,8,11,14)){
+    samples<-pops_info$Sample[pops_info$Population.Year==popyr1[p]]
+    depths<-data.frame()
+    for (i in 1:length(samples)){
+        # Read directly from the externatl drive
+        df<-fread(paste0("/Volumes/Kaho_Data/PacHerring/Output/CNV/ahr/depth_files/",gene,".",samples[i],".txt.gz"))
+        df$sample<-samples[i]
+        depths<-rbind(depths,df)
+    }
+    fwrite(depths,paste0("../Output/CNV/ahr/summary/",gene,".",popyr1[p], '.csv.gz'))
+    }
+}
+
+# Create plots (ggplot)
+for (p in c(2,7)){    
+    depths<-fread(paste0("../Output/CNV/ahr/summary/",gene,".", popyr1[p],".csv.gz"))
+    depths<-depths[,-1]
+        
+    ggsave(paste0("../Output/CNV/ahr/summary/", gene,"_",popyr1[p],".png"),width =25,height=length(samples)/5*2,dpi=300, 
+        ggplot(depths, aes(x=V2, y=V3))+
+        facet_wrap(~sample, ncol=5)+
+        geom_point(shape=".",  alpha=0.3, color="blue")+
+        ylab("Read depth")+xlab("position")+theme_bw()+
+        ylim(0,30)+
+        ggtitle(paste(popyr1[p], gene))+
+        geom_vline(xintercept = start, color="gray70", size=0.3)+
+        geom_vline(xintercept = end, color="gray70", size=0.3)+
+        theme(axis.text.x = element_text(angle = 90, hjust=1)))
+}
+
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```

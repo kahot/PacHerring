@@ -1,0 +1,211 @@
+---
+title: "NGSAdmix"
+output": html_notebook
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+# Run NGSadmix Steps
+
+## Prune SNPs: Using Plink to prune highly linked snps  
+
+* Plink output file: PH_maf05_prune_50.5.0.5.prune.in
+    - Need to reformat the plink output (xxx.prune.in) file to a bed format in order to subset a vcf file  
+```{bash eval=FALSE, echo=TRUE}
+#Reformat prun.in file with running the reformat_prunin.R
+R
+source("reformat_prunin.R")
+reformat_prunin("ph/data/new_vcf/MD7000/pruned/PH_maf05_prune_50.5.0.5.prune.in")
+#output ph/data/new_vcf/MD7000/pruned/PH_maf05_prune_50.5.0.5.prune.in.sites.txt
+quit()
+
+## Use bcftools to subset the VCF file with .prune.in.sutes.txt
+bcftools view -R /home/ktist/ph/data/new_vcf/MD7000/pruned/PH_maf05_prune_50.5.0.5.prune.in.sites.txt  /home/ktist/ph/data/new_vcf/MD7000/PH_DP600_7000_minQ20_minMQ30_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/pruned/PH_DP600_7000_NS0.5_maf05_pruned.vcf
+bgzip /home/ktist/ph/data/new_vcf/MD7000/pruned/PH_DP600_7000_NS0.5_maf05_pruned.vcf
+
+#Create beagle files (create_beagle.sh)
+#e.g. do chromosome by chromosome
+vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/pruned/PH_DP600_7000_NS0.5_maf05_pruned.vcf.gz --chr chr1 --out /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_pruned_c1 --BEAGLE-PL 
+
+# remove the head from chr2-26 (slurm scripts do not work, so run the command on the terminal) (combined_beagle.sh)
+sed -e '1, 1d' < /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_pruned_c2.BEAGLE.PL  > /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c2.BEAGLE.PL 
+
+#Combined all into one file
+cat /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_pruned_c1.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c2.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c3.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c4.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c5.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c6.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c7.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c8.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c9.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c10.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c11.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c12.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c13.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c14.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c15.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c16.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c17.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c18.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c19.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c20.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c21.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c22.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c23.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c24.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c25.BEAGLE.PL /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_noheader_c26.BEAGLE.PL  > /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_maf05_pruned_BEAGLE.PL 
+
+bgzip /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_maf05_pruned_BEAGLE.PL 
+
+```
+
+## Run NGSadmix  
+
+```{bash}
+# run k=2-5 (run_NGSadmix.sh)
+for i in {2..5} 
+do 
+NGSadmix -likes /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_maf05_pruned.BEAGLE.PL.gz -K $i -o /home/ktist/ph/data/NGSadmix/Ph_pruned_maf05_k$i -P 8 
+done 
+
+```
+
+
+## Run evalAdmix (locally)
+```{bash}
+#evalAdmix_runlocal.sh
+
+evalAdmix -beagle Data/ngsadmix/PH_maf05_pruned_BEAGLE.PL.gz -fname Data/ngsadmix/PH_pruned_maf05_k2.fopt.gz -qname Data/ngsadmix/PH_pruned_maf05_k2.qopt -P 8 -o output.corres.k2.txt
+
+```
+
+
+# Results from NGSadmix
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+source("../Rscripts/visFuns.R")
+
+library(tidyverse)
+library(tibble)
+
+#Output files
+qfiles<-list.files("../Data/ngsadmix/",pattern=".qopt")
+
+ofiles<-list.files("../Data/ngsadmix/",pattern="output.corres")
+
+#population info
+pop<-read.csv("../Data/Sample_metadata_892pops.csv")
+
+pop$Population.Year<-factor(pop$Population.Year, levels=c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+
+poporder<-paste(pop$Population.Year[order(pop$Population.Year)])
+pop_order<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+
+#color for populations
+#levels=c("TB","PWS","SS", "BC","WA","CA"))
+#colors= cols ("#56b4e9" "#cc79a7" "#009e73" "#0072b2" "#d55e00" "#e69f00" "#f0e442")
+
+for (i in 1:length(qfiles)){
+    # extract K from the file name
+    oname<-ofiles[i]
+    k<-as.integer(substr(oname, 16,17))
+    
+    #read the qopt file for k=k
+    q<-read.table(paste0("../Data/ngsadmix/", qfiles[i]))
+    
+    #order according to population and plot the NGSadmix results
+    q$id<-pop$Population.Year
+    q<-q[order(q$id),]
+    
+    ord<-orderInds(pop = as.vector(poporder), q = q[,1:(i+1)])
+    
+    xlabels<-data.frame(x=tapply(1:length(poporder),list(poporder), mean))
+    xlabels$pop<-factor(rownames(xlabels), levels=pop_order)
+    xlabels<-xlabels[order(xlabels$pop),]
+    
+    # c('PWS color', 'TB color', 'CA color" )
+    #if (i==1|i==2) colors=c(4,2,7)
+    if (i==1|i==2) colors=c(2,4,7)
+    #colors<-c("#cc79a7","#56b4e9", "#e69f00")
+    #if (i==3) colors=c(5,4,7,2,3) 
+    if (i==3) colors=c(5,2,7,4,3) 
+    if (i==4) colors=c(4,2,5,7,3)
+
+    {png(paste0("../Output/ngsadmix/Admix_plot_k",k,".png"), height = 3.5, width=8, unit="in", res=300)
+    barplot(t(q[,1:(i+2)])[,ord],col=colors,space=0,border=NA,xaxt="n",xlab="Population",ylab=paste0("Admixture proportions for K=",k))
+    text(xlabels$x,-0.05,xlabels$pop,xpd=T, srt=90, adj=1,cex=0.8)
+    abline(v=cumsum(sapply(unique(poporder[ord]),function(x){sum(pop[ord,"Population.Year"]==x)})),col=1,lwd=1.2)
+    dev.off()}
+    
+    #Plot the correlation matrix from evalAdmix
+    r<-read.table(paste0("../Data/ngsadmix/",ofiles[i]))
+    
+    # Plot correlation of residuals
+    {pdf(paste0("../Output/ngsadmix/evalAdmix_corplot_k",k,".pdf"), height = 8, width=10)
+    plotCorRes(cor_mat = r, pop = as.vector(pop[,"Population.Year"]), ord = ord, title=paste0("Evaluation of admixture proportions with K=",k), max_z=0.1, min_z=-0.1)
+    dev.off()}
+}
+
+
+```
+
+![](../Output/ngsadmix/Admix_plot_k2_small.png)
+
+* Correlation of residuals
+
+![](../Output/ngsadmix/evalAdmix_corplot_k2.png)
+
+
+
+![](../Output/ngsadmix/Admix_plot_k3_small.png)
+
+![](../Output/ngsadmix/evalAdmix_corplot_k3.png)
+
+
+![](../Output/ngsadmix/Admix_plot_k4_small.png)
+
+![](../Output/ngsadmix/evalAdmix_corplot_k4.png)
+
+<br>
+
+# Use Clumpak to choose the best K
+* see https://github.com/alexkrohn/AmargosaVoleTutorials/blob/master/ngsAdmix_tutorial.md
+
+## Run NGSadmix 10 times for each K (K= 3 & 4)
+* see RunNGSadmix.sh
+
+## Compile all likelihood numbers from log files into 1 (logfile)
+
+```{bash eval=FALSE}
+#linux code (won't work for unix)
+(for log in `ls *.log`; do grep -oP 'Ph_pruned_maf05_\K[^ ]+|like=\K[^ ]+' $log; done) > logfile_k3
+(for log in `ls *.log`; do grep -oP 'Ph_pruned_maf05_\K[^ ]+|like=\K[^ ]+' $log; done) > logfile_k4
+```
+
+
+## Read 'logfile' & create an input file for Clumpak
+* http://clumpak.tau.ac.il/bestK.html  
+* Upload the log probability table file to the website and submit the form
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+log2<-read.table("../Data/ngsadmix/logfile_k2", sep="\t", header =FALSE)
+log3<-read.table("../Data/ngsadmix/logfile_k3", sep="\t", header =FALSE)
+log4<-read.table("../Data/ngsadmix/logfile_k4", sep="\t", header =FALSE)
+logk2<-log2[c(FALSE,TRUE),]
+logk3<-log3[c(FALSE,TRUE),]
+logk4<-log4[c(FALSE,TRUE),]
+
+logs<-data.frame(K=c(rep(2, times=10),rep(3, times=10), rep(4, times=10)), Liklihood=c(logk2,logk3, logk4))
+write.table(logs, "../Output/ngsadmix/logs.txt", sep="\t", row.names = F, col.names = F, quote=F)
+# DO NOT use special character in the file name
+#Must have at least three K values
+
+#upload the logs.txt to Clumpak website
+# http://clumpak.tau.ac.il
+
+#'Estimating the Best K (from Clumpak)'
+
+# The method of Evanno enables the user to identify a single k value, out of a range of K values, which captures the uppermost 
+# level of structure. This method was purposed by Evonno et al. in 2005 (Molecular Ecology 14, 2005). In addition, we also use
+# ln(Pr(X|K) #values in order to identify the k for which Pr(K=k) is highest (as described in STRUCTURE's manual, section 5.1).
+
+#STRUCTURE manual
+#' it is not infrequent that in real data the value of our model choice criterion continues to increase with increasing K. 
+# Then it usually makes sense to focus on values of K that capture most of the structure in the data and that seem 
+# biologically sensible.'
+
+
+# plot admix values
+
+
+
+```
+
+* Resuls from CLUMPAK   
+**"Optimal K by Evanno is: 3 "**
+

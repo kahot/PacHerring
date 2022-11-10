@@ -1,0 +1,2160 @@
+---
+title: "PCAngsd"
+output": html_notebook
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+# Run PCAnsgd for PWS populations 
+Using the 'PWSonly' sites (~770k snps) 
+Running PCAngsd requires several steps
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(gridExtra)
+library(ggforce)
+library(tidyverse)
+library(PopGenome)
+library(dplyr)
+library(cowplot)
+library(ggvenn)
+library(knitr)
+library(kableExtra)
+```
+
+## Steps
+
+### Prune SNPs: Using Plink to prune highly linked snps  
+* Need to reformat the output (xxx.prune.in) file to subset a vcf file (ratehr than using it for  pruing a ped/bed file) 
+```{bash eval=FALSE, echo=TRUE}
+#first create ped/bed files with adding variant id
+module load plink
+plink --vcf /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz --set-missing-var-ids @:#[ph]\\$r,\\$a --make-bed --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05
+plink --bfile /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05 --recode --tab --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05
+
+#find highly correlated sites for pruning
+plink --file /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05 --indep-pairwise 75'kb' 5 0.5 --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05_75_5_0.5
+
+#50kb does not make much difference
+plink --file /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05 --indep-pairwise 50'kb' 5 0.5 --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05_50_5_0.5
+# See comparison results in     Data/PCAngsd/pruning_parameter_difference.txt
+
+#Reformat prun.in file with running the reformat_prunin.R
+R
+source("reformat_prunin.R")
+reformat_prunin("ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05_75_5_0.5.prune.in")
+quit()
+```
+
+### Using bcftools to subset the VCF file using prune.in file
+
+### Convert VCF to the beagle format and run PCAnsgd
+
+```{bash eval=FALSE, echo=TRUE}
+#create vcf files with only prune.in sites
+#index the vcf first
+bcftools index home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz
+
+bcftools view -R /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_NS0.5_maf05_75_5_0.5.prune.in.sites.txt /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_maf05_pruned.vcf
+bgzip /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_maf05_pruned.vcf
+
+#Create beagle files (create_beagle_PWS.sh)
+#e.g.
+vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/PWSonly_maf05_pruned.vcf.gz --chr chr1 --out /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_c1 --BEAGLE-PL 
+
+gzip /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_c1.BEAGLE.PL 
+
+#Run PCAngsd (pcangsd_pws.sh)
+#e.g. 
+python /home/jamcgirr/apps/pcangsd/pcangsd.py -beagle /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_c1.BEAGLE.PL.gz -o /home/ktist/ph/data/angsd/PCAngsd/PWSonly_maf05_chr1 -threads 16 
+
+```
+
+
+## Results of PCAngsd 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pop_info<-pop_info[,c("Sample","Population.Year","pop","Year.Collected")]
+colnames(pop_info)[4]<-"year"
+pops<-pop_info[pop_info$pop=="PWS",]
+
+pcols<-c("#d7b5d8","#df65b0","#dd1c77","#980043")
+Plots<-list()
+chr<-paste0("chr", c(1:23,25:26) ) #exclude chr24
+for (i in 1:length(chr)){
+    C <- as.matrix(read.table(paste0("../Data/PCAangsd/PWSonly_maf05_",chr[i],".cov")))
+    e <- eigen(C)
+    pca <-data.frame(Sample=pops$Sample, 
+                     pop=pops$pop,
+                     year=pops$year,
+                     PC1=e$vectors[,1],PC2=e$vectors[,2],
+                     PC3=e$vectors[,3],PC4=e$vectors[,4],
+                     PC5=e$vectors[,5],PC6=e$vectors[,6],
+                     PC7=e$vectors[,7],PC8=e$vectors[,8],
+                     stringsAsFactors=FALSE)
+    
+    prop_explained <- c()
+    for (s in e$values[1:10]) {
+        #print(s / sum(e$values))
+        prop_explained <- c(prop_explained,round(((s / sum(e$values))*100),2))
+    }
+    #write.csv(pca, paste0("../Output/PCA/PWSonly_pca_",chr[i],".csv"), row.names = F)
+    Plots[[i]]<-ggplot()+
+        geom_point(data = pca, aes(x = PC1, y = PC2, fill = factor(year), color = factor(year), shape = factor(year)), size = 3)+
+        scale_shape_manual(values=c(23,25,3,21), guide="none")+
+        scale_fill_manual(values=paste0(pcols,"99"), guide="none")+
+        scale_color_manual(values=pcols[1:4])+
+        xlab(paste("PC 1: ", prop_explained[1],"%\n",sep = ""))+
+        ylab(paste("PC 2: ", prop_explained[2],"%\n",sep = ""))+
+        theme_bw()+
+        ggtitle(paste0(chr[i]))+
+        guides(shape = guide_legend(override.aes =c(23,25,3,21)), fill=guide_legend(override.aes =paste0(pcols,"99")))+theme(legend.title = element_blank())
+}
+
+
+{pdf("../Output/PCA/PWSonly_PCA_byChromosome.pdf",width = 35, height = 30)
+do.call(grid.arrange, c(Plots, ncol=5))
+dev.off()
+}
+
+g <- arrangeGrob(do.call(grid.arrange, c(Plots, ncol=5)))
+ggsave(g, file="../Output/PCA/PWSonly_PCA_byChromosome.png",width = 35, height = 30)
+
+```
+![](../Output/PCA/PWSonly_PCA_byChromosome.png)  
+The separation among years are not so clear but clustering into 3 groups are visible in Chr4,8,15,20. 
+
+<br>
+
+
+# Look at each chromosome, starting with Chr15  
+
+## PWS Chromosome 15 grouped into 3 (PC1 >10%)  
+Chr15 shows the largest proportion explained by PC1 (strongest clustering)
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+#proportion of year in each group
+ch15<-read.csv("../Output/PCA/PWSonly_pca_chr15.csv")
+gp1<-ch15[ch15$PC1<0,]
+gp2<-ch15[ch15$PC1>=0&ch15$PC1<0.075,]
+gp3<-ch15[ch15$PC1>0.075,]
+
+table(gp1$year)
+#1991 1996 2007 2017 
+#  25   39   23   22 
+  
+table(gp2$year)
+#1991 1996 2007 2017 
+#  22   28   21   23 
+table(gp3$year)
+#1991 1996 2007 2017 
+#11    5    2   11 
+
+no<-table(pops$year)
+#1991 1996 2007 2017 
+#  58   72   46   56 
+
+gp1$group<-"Group1"
+gp2$group<-"Group2"
+gp3$group<-"Group3"
+c15<-rbind(gp1,gp2,gp3)
+c15$yr.pop<-paste0(c15$pop, substr(c15$year,3,4))
+write.csv(c15,"../Output/PCA/chr15_PCAgroups.csv")
+
+ggplot()+
+        geom_point(data = c15, aes(x = PC1, y = PC2, fill = factor(year), color = factor(year), shape = factor(year)), size = 3)+
+        scale_shape_manual(values=c(23,25,3,21), guide="none")+
+        scale_fill_manual(values=paste0(pcols,"99"), guide="none")+
+        scale_color_manual(values=pcols[1:4])+
+        xlab("PC 1")+
+        ylab("PC 2")+
+        theme_bw()+
+        ggtitle("Chr15")+
+        guides(shape = guide_legend(override.aes =c(23,25,3,21)), fill=guide_legend(override.aes =paste0(pcols,"99")))+theme(legend.title = element_blank())+
+     stat_ellipse(data=c15, aes(x=PC1, y=PC2, group=group), level=0.999,color="gray50", size=0.2)+
+    annotate("text", x=-0.06, y=0.22, label="Group 1")+
+    annotate("text", x=0.01, y=0.18, label="Group 2")+
+    annotate("text", x=0.12, y=0.18, label="Group 3")
+ggsave("../Output/PCA/Chr15_PCA_withGroups.png", width = 6, height = 4.5,dpi=300 )
+```
+![](../Output/PCA/Chr15_PCA_withGroups.png){width=70%}  
+
+### Create a summary of group proportions in each year  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, eval=FALSE}
+#Create a summary
+ch15_summary<-data.frame(year=c(1991,1996,2007,2017))
+ch15_summary$Group1<-as.vector(table(gp1$year))
+ch15_summary$Group2<-as.vector(table(gp2$year))
+ch15_summary$Group3<-as.vector(table(gp3$year))
+
+#quick chi-square test 
+chisq.test(ch15_summary[,2:4])
+#	Pearson's Chi-squared test
+#X-squared = 10.667, df = 6, p-value = 0.09922
+#2007 vs. 2017
+chisq.test(ch15_summary[c(3,4),2:4])
+#X-squared = 5.4156, df = 2, p-value = 0.06668
+
+c15m<-melt(ch15_summary, id.vars="year")
+ggplot(c15m, aes(x=factor(year), y=value, fill=variable))+
+    geom_bar(stat="identity", width=0.5, color="gray40",position = "fill")+
+    theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
+    scale_fill_manual(values=c("#fbb4ae","#b3cde3","#ccebc5"))+xlab("Year")+ggtitle("PWS Chr15")
+ggsave("../Output/PCA/PWS_ch15_prop_indivi_in3groups.png", width = 6, height = 4, dpi=150)
+```
+![](../Output/PCA/PWS_ch15_prop_indivi_in3groups.png){width=60%}  
+
+The proportions of the 3 groups change over time (marginally significantly different. 
+<br>
+
+### How and where do groups differ? Plot Fst and Dxy along the chromosome 
+
+Use "PopGenome" package to assess Fst, Dxy, and pi. 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Calculate Fst among the 3 groups using PopGenome
+# read chr15 from the 'PWSonly' file
+pws <- readData("../Data/new_vcf/PWS/PWSonly_chr15/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+
+#assign groups
+pops$group<-"Group1"
+pops$group[pops$Sample %in% gp2$Sample]<-"Group2"
+pops$group[pops$Sample %in% gp3$Sample]<-"Group3"
+populations <- split(pops$Sample, pops$group)
+
+pws<-set.populations(pws, populations, diploid = T)
+
+# set the chromosome size
+chr15<-28713521
+
+# set window size and window jump
+window_size <- 50000
+window_jump <- 10000
+# make a sliding window dataset
+pws_sw <- sliding.window.transform(pws, width = 50000, jump = 10000, type = 2)
+# crate sliding window info
+windows<-pws_sw@region.names
+windows<-gsub(" ","", windows)
+windows<-gsub(":","",windows)
+window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+#calculate diversity stats
+pws_sw <- diversity.stats(pws_sw, pi = TRUE)
+pws_sw <- F_ST.stats(pws_sw, mode = "nucleotide")
+
+# extract nucleotide diversity and correct for window size
+nd <- pws_sw@nuc.diversity.within/50000
+
+# make group name vector
+groupnames <- sort(unique(pops$group))
+# set population names
+colnames(nd) <- paste0(groupnames, "_pi")
+
+# extract fst values
+fst <- t(pws_sw@nuc.F_ST.pairwise)
+
+# extract dxy - pairwise absolute nucleotide diversity
+dxy <- get.diversity(pws_sw, between = T)[[2]]/50000
+
+# get column names 
+x <- colnames(fst)
+x <- sub("pop1", groupnames[1], x)
+x <- sub("pop2", groupnames[2], x)
+x <- sub("pop3", groupnames[3], x)
+x <- sub("/", "_", x)
+
+colnames(fst)<-paste0("fst_",x)
+colnames(dxy)<-paste0("dxy_",x)
+
+#combine all data
+pws_data <- as_tibble(data.frame(window, nd, fst, dxy))
+
+comb<-combn(groupnames, 2)
+comb<-t(comb)
+for (i in 1: nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        dt<-pws_data[, c("mid", paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2), paste0(pop1,"_pi"),paste0(pop2,"_pi")) ]
+        colnames(dt)[2:3]<-c("Fst","Dxy")
+    
+        dt_g<-gather(dt, -mid, key = "stat", value = "value")
+        dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy",colnames(dt)[4], colnames(dt)[5]))
+        ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr15 ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, chr15,1 ))
+        ggsave(paste0("../Output/PCA/PWSonly_Diversity_stats_chr15_",pop1," vs.", pop2,".png"), width = 9, height = 4, dpi=150)
+    }
+```
+<br>
+
+![](../Output/PCA/PWSonly_Diversity_stats_chr15_Group1 vs.Group2.png)  
+![](../Output/PCA/PWSonly_Diversity_stats_chr15_Group1 vs.Group3.png)
+![](../Output/PCA/PWSonly_Diversity_stats_chr15_Group2 vs.Group3.png)
+  
+Position 0-16.5Mb shows a strong differentiation among groups. 
+<br>
+
+### Check if an inversion is visible in the genotype-plot  
+
+![](../Output/chr/DP7000/chr15/PWSonly_PWS96_chr15.png){width=30%} 
+![](../Output/chr/DP7000/chr15/PWSonly_PWS17_chr15.png){width=30%} 
+  
+The proportion of Group2 is higher in PWS96 and PWS07 -> More heterozygous snps in PWS96 &PWS07?
+
+### Calculate Heterozygosity from ANGSD .saf files
+ -Can calculate heterozygosity for an entire chromosome or genome only (not useful for assessing within a chromosme)
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#estimate heterozygosity from .saf from ANGSD -> can't divide het into regions  
+popnames<-c("PWS91","PWS96","PWS07","PWS17")
+
+het<-data.frame(pop=popnames)
+for (i in 1:4){
+    a<-scan(paste0("../Data/new_vcf/angsd/fromBam/unfolded/",popnames[i],"_unfolded.sfs"))
+    het$He[i]<-a[2]/sum(a)
+}
+
+het
+#   pop     he_bam
+#1 PWS91 0.02653463
+#2 PWS96 0.02865388
+#3 PWS07 0.02564408
+#4 PWS17 0.02336336
+
+kable(het, "html") %>%
+  kable_styling(full_width = F)
+```
+
+### Compare heterozygosity per region per group per year using bcftools
+The following code is referred as "Box1"
+```{bash eval=FALSE, echo=TRUE}
+#Calculate heterozygosity per window using bcftools (het_stats_PWS91.sh)
+#e.g. 
+bcftools stats -r chr15:0-100000 -s - /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly91_maf05.vcf.gz | grep '^PSC' > /home/ktist/ph/data/new_vcf/MD7000/population/PWS91/PWS91_stats_1
+bcftools stats -r chr15:100000-200000 -s - /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly91_maf05.vcf.gz | grep '^PSC' > /home/ktist/ph/data/new_vcf/MD7000/population/PWS91/PWS91_stats_2
+# for for all regions...
+# run slurm scripts (het_statsXYX.sh)
+
+#Convert the output files to tab-deliminted, and cat them(catFiles_PWS91.sh)
+for f in *; do sed -i "s/$/\t$f/" $f; done 
+cat $(ls -t) > PWS91_statsFile
+```
+
+
+### Results of observed heterozygosity (Ho) per year for each group
+* Summarize Ho based on two regions (region1=high-Fst (~16.5Mb) vs. region2=low-Fst(16.5~end))
+
+```{r echo=TRUE, message=FALSE, warning=FALSE,eval=FALSE}
+## Read the stats files and create het summary
+# Calculate Ho and He from bcftools stats output files (stats from PWSonly files)
+sfiles<-list.files("../Data/new_vcf/PWSonly/", pattern="_chr15_statsFile")
+Het_sum<-data.frame()
+#c15<-read.csv("../Output/PCA/chr15_PCAgroups.csv", row.names = 1)
+for (i in 1:length(sfiles)){
+    df<-read.table(paste0("../Data/new_vcf/PWSonly/", sfiles[i]), sep="\t", header=F)
+    pname<-gsub("_chr15_statsFile",'',sfiles[i])
+    pname<-gsub("PWSonly_",'', pname)
+    df<-df[,c(3:10, 14)]
+    colnames(df)<-c("Sample","nRefHom","nNonRefHom","nHets", "nTransitions", "nTransversions","nIndels","average depth","nMissing","window_no")
+    df$p<-(2*df$nRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$q<-(2*df$nNonRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    
+    df$He<-2*df$p*df$q
+    df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
+    
+    df$Group<-"Group1"
+    df$Group[df$Sample %in% c15$Sample[c15$group=="Group2"]]<-"Group2"
+    df$Group[df$Sample %in% c15$Sample[c15$group=="Group3"]]<-"Group3"
+    
+    Ho<-aggregate(df[,"Ho"], by=list(df$window_no, df$Group), mean )
+    He<-aggregate(df[,"He"], by=list(df$window_no,df$Group), mean )
+    het<-cbind(Ho, He$x)
+    colnames(het)<-c("window_id","Group","Ho","He")
+    write.csv(het,paste0("../Output/Stats_window/PWSonly_chr15_Heteroz_",pname,"_maf05.csv"))
+    
+    het$window<-as.integer(gsub(paste0(pname,"_stats_"),'',het$window_id))
+    het$loc<-"region1"
+    het$loc[het$window>165]<-"region2"
+    
+    groupHo<-aggregate(het[,"Ho"], by=list(het$Group, het$loc), mean , na.rm=T)
+    colnames(groupHo)<-c("Group","Region","Ho")
+    groupHo$year<-pname
+    Het_sum<-rbind(Het_sum,groupHo)
+}
+
+write.csv(Het_sum, "../Output/Stats_window/PWSonly_chr15_Hetero_group_summary.csv")
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE,eval=FALSE}
+#Create a figure
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+
+Het<-data.frame()
+for (i in 1:length(pops)){
+    df<-read.csv(paste0("../Output/Stats_window/PWSonly_chr15_Heteroz_",pops[i],"_maf05.csv"), row.names = 1)
+    df$window<-as.integer(gsub(paste0(pops[i],"_stats_"),'',df$window_id))
+    df$loc<-"region1"
+    df$loc[df$window>165]<-"region2"
+    df$pop<-pops[i]
+    Het<-rbind(Het,df)    
+}
+
+gcols<-c("#FB687B","#48ABE3","#75BA76")
+Het$pop<-factor(Het$pop, levels=pops)
+#Het_sum<-read.csv("../Output/Stats_window/PWSonly_chr15_Hetero_group_summary.csv", row.names = 1)
+
+colnames(Het_sum)[4]<-"pop"
+Het_sum$pop<-factor(Het_sum$pop, levels=pops)
+
+ggplot()+
+    geom_boxplot(data=Het,aes(x=loc, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    geom_point(data=Het_sum, aes(x=Region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    facet_wrap(~pop)+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=gcols)+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')
+ggsave("../Output/PCA/PWS_Chr15_Ho.in.tworegions.png", width = 8, height = 7, dpi=300)
+```
+![](../Output/PCA/PWS_Chr15_Ho.in.tworegions.png)  
+Observed heterozygosity (Ho) is higher in Group2 than Group1 in Region 1 (the hypothetical inversion region).
+Heterozygosity appeared to be suppressed in Group1. 
+
+<br>
+
+## Chr15 group proportions in other populations 
+### *3 groups of PWS are the same for all populations considered
+
+![all pops](../Output/chr/ch15_all.png){width=30%}  ![no TB](../Output/chr/ch15_noTB.png){width=30%}  
+
+### Summary of group proportions for each pop  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, eval=FALSE}
+#from Chr_Analysis.R
+gp15<-read.csv("../Output/PCA/chr15_PCAgroups.csv", row.names = 1)
+#double check the same individulas are in the same groups for PWS pops
+
+setequal(gp15$Sample[gp15$Group=="Group1"&gp15$pop=="PWS"], c15$Sample[c15$Group=="Group1"])
+setequal(gp15$Sample[gp15$Group=="Group3"&gp15$pop=="PWS"], c15$Sample[c15$Group=="Group3"])
+
+pop.sum<-gp15 %>% count(Group, yr.pop)
+
+pop.sum$yr.pop<-factor(pop.sum$yr.pop, levels=c("PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+ggplot(data=pop.sum, aes(x=yr.pop, y=n, fill=factor(Group)))+
+    geom_bar(position="fill", stat="identity", color="gray30")+
+    scale_fill_manual(values=c("#fbb4ae","#b3cde3","#ccebc5"), labels=c("Group1","Group2","Group3"))+
+    theme_light()+ggtitle("Chr15")+
+    xlab("")+ylab("Proportion")+theme(legend.title = element_blank())
+ggsave("../Output/PCA/Chr15_3groups_barplot_allPops.png", width = 8, height = 5.5, dpi=300)
+```
+![](../Output/PCA/Chr15_3groups_barplot_allPops.png){width=75%}
+The majority of CA individuals are in Group 2 & 3, while others are Group 1 & 2.  
+PWS populations are uniquely differnet from SS pops.
+<br>
+
+### Compare heterozygosity among groups for all pops 
+
+```{bash eval=FALSE, include=FALSE}
+# 1. divide the VCF file into each group (subsetVCF_byChrom15.sh)
+# 2. Index the vcf files
+# 3. calculate heterozygosity stats per group (het_statsgroup1.sh ~ het_statsgroup3.sh)
+# 4. change the output into tab-delimited and concatinate
+for f in *; do sed -i "s/$/\t$f/" $f; done 
+cat $(ls -t) > PWS91_statsFile
+```
+
+#### heterozygosity is higher in Group2 (The same pattern as in PWS)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Calculate Ho and He from bcftools stats output files
+sfiles<-list.files("../Data/new_vcf/ch15/", pattern="_maf05_statsFile")
+groups<-paste0("group",1:3)
+Het<-data.frame()
+for (i in 1:length(sfiles)){
+    df<-read.table(paste0("../Data/new_vcf/ch15/", sfiles[i]), sep="\t", header=F)
+    df<-df[,c(3:10, 14:15)]
+    colnames(df)<-c("Sample","nRefHom","nNonRefHom","nHets", "nTransitions", "nTransversions","nIndels","average depth","nMissing","window_no")
+    df$p<-(2*df$nRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$q<-(2*df$nNonRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$He<-2*df$p*df$q
+    df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
+    
+    Ho<-aggregate(df[,"Ho"], by=list(df$window_no), mean )
+    He<-aggregate(df[,"He"], by=list(df$window_no), mean )
+    het<-cbind(Ho, He$x)
+    colnames(het)<-c("window_id","Ho","He")
+    het$Group<-paste0("Group",i)
+    het$window<-as.integer(gsub(paste0("ph_ch15_",groups[i],"_stats_"),'',het$window_id))
+    Het<-rbind(Het,het)
+}
+ 
+Het$loc<-"region1"
+Het$loc[Het$window>165]<-"region2"
+write.csv(Het, "../Output/PCA/Chr15_Ho_byGroups.csv")    
+
+groupHo<-aggregate(Het[,"Ho"], by=list(Het$Group, Het$loc), mean , na.rm=T)
+colnames(groupHo)<-c("Group","Region","Ho")
+write.csv(groupHo, "../Output/Stats_window/Chr15_Hetero_group1-3_summary.csv")
+
+#Plot the results
+gcols<-c("#FB687B","#48ABE3","#75BA76")
+ggplot()+
+    geom_boxplot(data=Het,aes(x=loc, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    geom_point(data=groupHo, aes(x=Region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=gcols)+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')
+ggsave("../Output/PCA/Chr15_Ho.allpops_in.tworegions.png", width = 6, height = 4, dpi=300)
+
+```
+![](../Output/PCA/Chr15_Ho.allpops_in.tworegions.png){width=70%}  
+
+
+####  Heterozygosity using maf0.01 vcf files for comparison 
+Ho patterns are highly similar to that of maf0.05.
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Ho using maf01 files for comparison
+sfiles<-list.files("../Data/new_vcf/ch15/", pattern="_maf01_statsFile")
+c15<-read.csv("../Output/PCA/chr15_PCAgroups.csv", row.names = 1)
+groups<-paste0("group",1:3)
+Het<-data.frame()
+for (i in 1:length(sfiles)){
+    df<-read.table(paste0("../Data/new_vcf/ch15/", sfiles[i]), sep="\t", header=F)
+    df<-df[,c(3:10, 14:15)]
+    colnames(df)<-c("Sample","nRefHom","nNonRefHom","nHets", "nTransitions", "nTransversions","nIndels","average depth","nMissing","window_no")
+    df$p<-(2*df$nRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$q<-(2*df$nNonRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$He<-2*df$p*df$q
+    df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
+    
+    Ho<-aggregate(df[,"Ho"], by=list(df$window_no), mean )
+    He<-aggregate(df[,"He"], by=list(df$window_no), mean )
+    het<-cbind(Ho, He$x)
+    colnames(het)<-c("window_id","Ho","He")
+    het$Group<-paste0("Group",i)
+    het$window<-as.integer(gsub(paste0("ph_ch15_",groups[i],"_maf01_stats_"),'',het$window_id))
+    Het<-rbind(Het,het)
+}
+ 
+Het$loc<-"region1"
+Het$loc[Het$window>165]<-"region2"
+write.csv(Het, "../Output/PCA/Chr15_Ho_byGroups_maf01.csv")    
+
+groupHo<-aggregate(Het[,"Ho"], by=list(Het$Group, Het$loc), mean , na.rm=T)
+colnames(groupHo)<-c("Group","Region","Ho")
+write.csv(groupHo, "../Output/Stats_window/Chr15_Hetero_group1-3_summary_maf01.csv")
+
+#Plot the results
+gcols<-c("#FB687B","#48ABE3","#75BA76")
+ggplot()+
+    geom_boxplot(data=Het,aes(x=loc, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    geom_point(data=groupHo, aes(x=Region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=gcols)+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')
+ggsave("../Output/PCA/Chr15_Ho.allpops_in.tworegions_maf01.png", width = 6, height = 3.5, dpi=300)
+
+```
+![](../Output/PCA/Chr15_Ho.allpops_in.tworegions.png){width=70%}   
+* very similar to maf0.05, meaning no need to use maf01 files
+
+<br>
+<br>
+
+# Chr8   
+
+## PWS Chromosome 8 grouped into 3 (PC1 = 5.8%)  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#proportion of year in each group
+ch8<-read.csv("../Output/PCA/PWSonly_pca_chr8.csv")
+gp1<-ch8[ch8$PC1<0,]
+gp2<-ch8[ch8$PC1>0&ch8$PC1<0.1,]
+gp3<-ch8[ch8$PC1>0.1,]
+
+table(gp1$year) #140
+#1991 1996 2007 2017 
+#  37   51   27   25 
+table(gp2$year) #83
+#1991 1996 2007 2017 
+#  19   19   17   28 
+table(gp3$year) #9
+#1991 1996 2007 2017 
+#   2    2    2    3 
+
+no<-table(pops$year)
+#1991 1996 2007 2017 
+#  58   72   46   56 
+
+gp1$group<-"Group1"
+gp2$group<-"Group2"
+gp3$group<-"Group3"
+c8<-rbind(gp1,gp2,gp3)
+write.csv(c8, "../Output/PCA/PWSonly_with.groups_pca_chr8.csv")
+
+ggplot()+
+        geom_point(data = c8, aes(x = PC1, y = PC2, fill = factor(year), color = factor(year), shape = factor(year)), size = 3)+
+        scale_shape_manual(values=c(23,25,3,21), guide="none")+
+        scale_fill_manual(values=paste0(pcols,"99"), guide="none")+
+        scale_color_manual(values=pcols[1:4])+
+        xlab(paste("PC 1"))+
+        ylab(paste("PC 2"))+
+        theme_bw()+
+        ggtitle("Chr8")+
+        guides(shape = guide_legend(override.aes =c(23,25,3,21)), fill=guide_legend(override.aes =paste0(pcols,"99")))+theme(legend.title = element_blank())+
+     stat_ellipse(data=c8, aes(x=PC1, y=PC2, group=group), color="gray50", size=0.2,level=0.995)+
+    annotate("text", x=-0.03, y=0.25, label="Group 1")+
+    annotate("text", x=0.035, y=0.2, label="Group 2")+
+    annotate("text", x=0.18, y=0.2, label="Group 3")
+ggsave("../Output/PCA/Ch8_PCA_withGroups_noTB.png", width = 6.5, height = 4.5, dpi=300)
+#TB is in 1 group
+```
+![](../Output/PCA/Ch8_PCA_withGroups_noTB.png){width=75%}
+
+### Calculate the group proportions for each year
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Create a summary
+ch8_summary<-data.frame(year=c(1991,1996,2007,2017))
+ch8_summary$Group1<-as.vector(table(gp1$year))
+ch8_summary$Group2<-as.vector(table(gp2$year))
+ch8_summary$Group3<-as.vector(table(gp3$year))
+
+#quick chi-square test 
+chisq.test(ch8_summary[,2:4])
+#	Pearson's Chi-squared test
+#X-squared = 9.4357, df = 6, p-value = 0.1505
+
+chisq.test(ch8_summary[c(2,4),2:4]) #PWS96 vs. PWS17
+#X-squared = 8.9581, df = 2, p-value = 0.01134
+#
+c8m<-melt(ch8_summary, id.vars="year")
+ggplot(c8m, aes(x=factor(year), y=value, fill=variable))+
+    geom_bar(stat="identity", width=0.5, color="gray40",position = "fill")+
+    theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
+    scale_fill_manual(values=c("#fbb4ae","#b3cde3","#ccebc5"))+xlab("Year")+ggtitle("PWS Chr8")
+ggsave("../Output/PCA/PWS_ch8_prop_indivi_in3groups.png", width = 6, height = 4, dpi=150)
+```
+![](../Output/PCA/PWS_ch8_prop_indivi_in3groups.png){width=70%}
+Chr8 group proportions also shift with years.  
+
+### Plot Fst and Dxy along the chromosome 
+
+```{r eval=FALSE, message=TRUE, warning=FALSE}
+# read chr8 from the 'PWSonly' file
+pws <- readData("../Data/new_vcf/PWSonly/PWSonly_chr8/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+
+pops<-pop_info[pop_info$pop=="PWS",]
+#assign groups
+pops$group<-"Group1"
+pops$group[pops$Sample %in% gp2$Sample]<-"Group2"
+pops$group[pops$Sample %in% gp3$Sample]<-"Group3"
+
+populations <- split(pops$Sample, pops$group)
+
+pws<-set.populations(pws, populations, diploid = T)
+
+# set the chromosome size
+chrsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+chr8<-chrsize$V3[chrsize$V1=="chr8"]
+
+# set window size and window jump
+window_size <- 50000
+window_jump <- 10000
+# make a sliding window dataset
+pws_sw <- sliding.window.transform(pws, width = 50000, jump = 10000, type = 2)
+# crate sliding window info
+windows<-pws_sw@region.names
+windows<-gsub(" ","", windows)
+windows<-gsub(":","",windows)
+window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+#calculate diversity stats
+pws_sw <- diversity.stats(pws_sw, pi = TRUE)
+pws_sw <- F_ST.stats(pws_sw, mode = "nucleotide")
+
+# extract nucleotide diversity and correct for window size
+nd <- pws_sw@nuc.diversity.within/50000
+
+# make group name vector
+groupnames <- sort(unique(pops$group))
+# set population names
+colnames(nd) <- paste0(groupnames, "_pi")
+
+# extract fst values
+fst <- t(pws_sw@nuc.F_ST.pairwise)
+
+# extract dxy - pairwise absolute nucleotide diversity
+dxy <- get.diversity(pws_sw, between = T)[[2]]/50000
+
+# get column names 
+x <- colnames(fst)
+x <- sub("pop1", groupnames[1], x)
+x <- sub("pop2", groupnames[2], x)
+x <- sub("pop3", groupnames[3], x)
+x <- sub("/", "_", x)
+
+colnames(fst)<-paste0("fst_",x)
+colnames(dxy)<-paste0("dxy_",x)
+
+#combine all data
+pws_data <- as_tibble(data.frame(window, nd, fst, dxy))
+write.csv(pws_data,"../Output/PCA/PWSonly_chr8_popgenome_stats.csv")
+
+comb<-combn(groupnames, 2)
+comb<-t(comb)
+for (i in 1: nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        dt<-pws_data[, c("mid", paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2), paste0(pop1,"_pi"),paste0(pop2,"_pi")) ]
+        colnames(dt)[2:3]<-c("Fst","Dxy")
+    
+        dt_g<-gather(dt, -mid, key = "stat", value = "value")
+        dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy",colnames(dt)[4], colnames(dt)[5]))
+        ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr8 ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, chr8,1 ))
+        ggsave(paste0("../Output/PCA/PWSonly_Diversity_stats_chr8_",pop1," vs.", pop2,".png"), width = 9, height = 4, dpi=150)
+    }
+```
+![](../Output/PCA/PWSonly_Diversity_stats_chr8_Group1 vs.Group2.png)  
+![](../Output/PCA/PWSonly_Diversity_stats_chr8_Group1 vs.Group3.png)  
+
+![](../Output/PCA/PWSonly_Diversity_stats_chr8_Group2 vs.Group3.png)
+Position 23Mb-end shows high Fst among groups.
+
+<br>
+
+### Genotype plot for each year  - inversion is not clearly visible  
+Chr8 is suggested to have a 'putative inversion' in Petrou et al. 2021
+
+![](../Output/chr/DP7000/chr8/PWSonly_PWS96_chr8.png){width=30%} 
+![](../Output/chr/DP7000/chr8/PWSonly_PWS07_chr8.png){width=30%} 
+![](../Output/chr/DP7000/chr8/PWSonly_PWS17_chr8.png){width=30%} 
+
+### Mean Fst between groups 
+
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+c8fst<-melt(pws_data[,c(3,7:9)], id.vars="mid")
+ggplot(c8fst, aes(x=variable, y=value, color=variable))+
+    geom_boxplot()+theme_light()+xlab('')+ylab('Fst')+
+    geom_point(stat="summary", fun="mean", color="gray30")
+ggsave("../Output/PCA/Ch8_Fst_between3goups.png",dpi=300, width = 6, height=4)
+mean(pws_data$fst_Group1_Group2) #0.03087093
+mean(pws_data$fst_Group1_Group3) #0.1283974
+mean(pws_data$fst_Group2_Group3) #0.07799754
+
+```
+![](../Output/PCA/Ch8_Fst_between3goups.png){width=50%}
+
+### Mean Fst between groups over years  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#calculate mean Fst between groups within each year
+pws <- readData("../Data/new_vcf/PWSonly/PWSonly_chr8/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+#assign groups
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-pop_info[pop_info$pop=="PWS",]
+
+pops$group<-"Group1"
+pops$group[pops$Sample %in% c8$Sample[c8$group=="Group2"]]<-"Group2"
+pops$group[pops$Sample %in% c8$Sample[c8$group=="Group3"]]<-"Group3"
+
+pops$id<-paste0(pops$group,".",pops$Year.Collected)
+populations2 <- split(pops$Sample, pops$id)
+
+pws2<-set.populations(pws, populations2, diploid = T)
+pws_sw2 <- sliding.window.transform(pws2, width = 50000, jump = 10000, type = 2)
+pws_sw2 <- diversity.stats(pws_sw2, pi = TRUE)
+pws_sw2 <- F_ST.stats(pws_sw2, mode = "nucleotide")
+nd2 <- pws_sw2@nuc.diversity.within/50000
+idnames <- names(pws2@populations)# sort(unique(pops$id))
+colnames(nd2) <- paste0(idnames, "_pi")
+
+fst2 <- t(pws_sw2@nuc.F_ST.pairwise)
+dxy2 <- get.diversity(pws_sw2, between = T)[[2]]/50000
+
+# get column names 
+x <- colnames(fst2)
+for (i in 1: length(idnames)){
+    x<-sub(paste0("pop",i,"/"), paste0(idnames[i],"_"), x)
+    x<-sub(paste0("pop",i,"$"), paste0(idnames[i]), x)
+}
+colnames(fst2)<-paste0("fst_",x)
+colnames(dxy2)<-paste0("dxy_",x)
+
+# crate sliding window info
+windows<-pws_sw2@region.names
+windows<-gsub(" ","", windows)
+windows<-gsub(":","",windows)
+window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+#combine all data
+pws_data2 <- as_tibble(data.frame(window, nd2, fst2, dxy2))
+fstall<-pws_data2[,c(3, grep("fst", colnames(pws_data2)))]
+fstm<-data.frame(Fst=colMeans(fstall[,2:67], na.rm=T))
+fstm$groupA<-substr(rownames(fstm), 5,10)
+fstm$groupB<-substr(rownames(fstm), 17,22)
+fstm$yearA<-substr(rownames(fstm), 12,15)
+fstm$yearB<-substr(rownames(fstm), 24,27)
+fstm$year<- apply(fstm[,c("yearA","yearB")], 1, function(x) {if (x["yearA"]==x['yearB']) x["yearA"]
+                                           else NA})
+
+pcols<-c("#d7b5d8","#df65b0","#dd1c77","#980043")
+fstm2<-fstm[!is.na(fstm$year),]
+fstm2$comp<-paste0(fstm2$groupA,".vs.",fstm2$groupB)
+ggplot(fstm2, aes(x=comp, y=Fst, fill=year))+
+    geom_bar(stat="identity",position=position_dodge(width = 1))+
+    theme_light()+xlab('')+
+    scale_fill_manual(values=pcols)
+ggsave("../Output/PCA/PWSonly_Fst_between.groups_eachYear.png", width = 7.5, height = 5, dpi=300)
+```
+![](../Output/PCA/PWSonly_Fst_between.groups_eachYear.png)
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+ggplot(fstm2, aes(x=year, y=Fst, color=comp, group=comp))+
+    geom_point()+
+    geom_path ()+
+    theme_light()+xlab('')+theme(legend.title = element_blank())+
+    scale_fill_manual(values=pcols)
+ggsave("../Output/PCA/PWSonly_ch8_Fst_overtime_amongGroups.png", width=6, height=4, dpi=200)
+```
+![](../Output/PCA/PWSonly_ch8_Fst_overtime_amongGroups.png)
+
+### Calculate heterozygosity for each group as in chr15 ('Box 1')
+
+```{bash eval=FALSE}
+#Calculate heterozygosity per window using bcftools (het_stats_PWS91.sh)
+#e.g. 
+
+bcftools stats -r chr15:0-230000 -s - /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly91_maf05.vcf.gz | grep '^PSC' > /home/ktist/ph/data/new_vcf/MD7000/population/PWS91/PWS91_stats_1
+bcftools stats -r chr15:100000-200000 -s - /home/ktist/ph/data/new_vcf/MD7000/population/PWSonly91_maf05.vcf.gz | grep '^PSC' > /home/ktist/ph/data/new_vcf/MD7000/population/PWS91/PWS91_stats_2
+#etc...
+
+#cat all files (catFiles_PWS91.sh)
+for f in *; do sed -i "s/$/\t$f/" $f; done 
+cat $(ls -t) > PWS91_statsFile
+
+```
+
+### Process the bcftools stats file to obtain Ho and He
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+## Read the stats files and create het summary
+
+# Calculate Ho and He from bcftools stats output files (stats from PWSonly files)
+sfiles<-list.files("../Data/new_vcf/PWSonly/", pattern="_chr8_statsFile")
+Het_sum<-data.frame()
+for (i in 1:length(sfiles)){
+    df<-read.table(paste0("../Data/new_vcf/PWSonly/", sfiles[i]), sep="\t", header=F)
+    pname<-gsub("_chr8_statsFile",'',sfiles[i])
+    pname<-gsub("PWSonly_",'', pname)
+    df<-df[,c(3:10, 14:15)]
+    colnames(df)<-c("Sample","nRefHom","nNonRefHom","nHets", "nTransitions", "nTransversions","nIndels","average depth","nMissing","window_no")
+    df$p<-(2*df$nRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$q<-(2*df$nNonRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    
+    df$He<-2*df$p*df$q
+    df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
+    
+    df$Group<-"Group1"
+    df$Group[df$Sample %in% gp2$Sample]<-"Group2"
+    df$Group[df$Sample %in% gp3$Sample]<-"Group3"
+    
+    Ho<-aggregate(df[,"Ho"], by=list(df$window_no, df$Group), mean )
+    He<-aggregate(df[,"He"], by=list(df$window_no,df$Group), mean )
+    het<-cbind(Ho, He$x)
+    colnames(het)<-c("window_id","Group","Ho","He")
+    write.csv(het,paste0("../Output/Stats_window/PWSonly_chr8_Heteroz_",pname,"_maf05.csv"))
+    
+    het$window<-as.integer(gsub(paste0(pname,"_stats_"),'',het$window_id))
+    het$loc<-"region1"
+    het$loc[het$window>165]<-"region2"
+    
+    groupHo<-aggregate(het[,"Ho"], by=list(het$Group, het$loc), mean , na.rm=T)
+    colnames(groupHo)<-c("Group","Region","Ho")
+    groupHo$year<-pname
+    Het_sum<-rbind(Het_sum,groupHo)
+}
+
+write.csv(Het_sum, "../Output/Stats_window/PWSonly_chr8_Hetero_group_summary.csv")
+```
+
+
+### Compare Heterozygosity levels among groups and between regions
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Create a figure
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+
+Het<-data.frame()
+for (i in 1:length(pops)){
+    df<-read.csv(paste0("../Output/Stats_window/PWSonly_chr8_Heteroz_",pops[i],"_maf05.csv"), row.names = 1)
+    df$window<-as.integer(gsub(paste0(pops[i],"_stats_"),'',df$window_id))
+    df$loc<-"region1"
+    df$loc[df$window>230]<-"region2"
+    df$pop<-pops[i]
+    Het<-rbind(Het,df)    
+}
+
+gcols<-c("#FB687B","#48ABE3","#75BA76")
+Het$pop<-factor(Het$pop, levels=pops)
+colnames(Het_sum)[4]<-"pop"
+Het_sum$pop<-factor(Het_sum$pop, levels=pops)
+
+ggplot()+
+    geom_boxplot(data=Het,aes(x=loc, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    geom_point(data=Het_sum, aes(x=Region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    facet_wrap(~pop)+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=gcols)+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')+ggtitle("Chr8")
+ggsave("../Output/PCA/PWS_Chr8_Ho.in.tworegions.png", , width = 8, height = 7, dpi=300)
+```
+![](../Output/PCA/PWS_Chr8_Ho.in.tworegions.png)
+
+## Chr8 group proportions in other populations 
+![](../Output/chr/ch8_all.png){width=30%} ![](../Output/chr/ch8_noTB.png){width=30%}
+
+TB clustered in one group. The rest are in 3 groups.
+
+### Create a summary of group proportions in each year  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, eval=FALSE}
+#from Chr_Analysis.R
+gp8<-read.csv("../Output/chr/DP7000/chr8/chr8_PCAgroups_updated.csv", row.names = 1)
+## make sure groupings are the same for all vs. PWSonly
+
+setequal(gp8$Sample[gp8$Group=="Group1"&gp8$pop=="PWS"], c8$Sample[c8$Group=="Group1"])
+setequal(gp8$Sample[gp8$Group=="Group3"&gp8$pop=="PWS"], c8$Sample[c8$Group=="Group3"])
+
+
+pop.sum<-gp8 %>% count(Group, yr.pop)
+
+pop.sum$yr.pop<-factor(pop.sum$yr.pop, levels=c("PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+ggplot(data=pop.sum, aes(x=yr.pop, y=n, fill=factor(Group)))+
+    geom_bar(position="fill", stat="identity", color="gray30")+
+    scale_fill_manual(values=c("#fbb4ae","#b3cde3","#ccebc5"), labels=c("Group1","Group2","Group3"))+
+    theme_light()+
+    xlab("")+ylab("Proportion")+theme(legend.title = element_blank())
+ggsave("../Output/PCA/Chr8_3groups_barplot_allPops.png", width = 8, height = 5.5, dpi=300)
+
+
+```
+![](../Output/PCA/Chr8_3groups_barplot_allPops.png){width=70%}
+
+* **CA and PWS17 have larger proportion of Group2 (which has higher Ho than group1 in the highFst region)**
+
+<br>
+<br>
+
+
+### Look at the overlap of individuals in Group3/Group2 of Chr15 and Chr8 (PWSonly)
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+
+c15g3<-c15$Sample[c15$Group=="Group3"]
+c8g3<-c8$Sample[c8$group=="Group3"]
+x<-list(chr8=c8g3,chr15=c15g3)
+p3<-ggvenn(x, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+
+c15g2<-c15$Sample[c15$Group=="Group2"]
+c8g2<-c8$Sample[c8$group=="Group2"]
+x2<-list(chr8=c8g2,chr15=c15g2)
+p2<-ggvenn(x2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+
+venn<-ggdraw()+
+        draw_plot(p2,x=0,y=0,width=0.5,height=1)+
+        draw_plot(p3,0.5,0,0.5,1)+
+        draw_plot_label("PWS", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch8.ch15.group_overlap.png"), plot = venn,base_width = 7, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch8.ch15.group_overlap.png)
+ * **Chr8 and Chr15 outliers (Group3 individuals) are not the same (only 3 samples belong to group3 in both)**
+
+
+<br>
+
+# Chr20   
+
+## Look at PWS Chromosome 20: → grouped into 3 
+
+* **Clustering patterns are slightly different for PWS only vs. with other populations**  
+
+* CA individuals have an inversion at the beginning of the chromosome
+* TB also separates into 3 groups (due to the presence of the inversion)
+
+![All populations](../Output/chr/chr20_all.png){width=40%} ![No TB ](../Output/chr/chr20_noTB.png){width=40%}    
+![](../Output/chr/DP7000/chr20/CA_chr20.png){width=40%}![](../Output/chr/DP7000/chr20/TB91_chr20.png){width=40%}
+
+<br>
+
+### Start with PWS only
+
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+
+#proportion of year in each group
+ch20<-read.csv("../Output/PCA/PWSonly_pca_chr20.csv")
+gp1<-ch20[ch20$PC1>0.02,]
+gp3.1<-ch20[ch20$PC1<(-0.15)&ch20$PC2>0,]
+gp3.2<-ch20[ch20$PC1<(-0.075)&ch20$PC2<0,]
+gp3<-rbind(gp3.1,gp3.2)
+gp2<-ch20[!(ch20$Sample %in% c(gp1$Sample, gp3$Sample)),  ]
+
+table(gp1$year) #99
+#1991 1996 2007 2017 
+#  24   28   19   28 
+table(gp2$year) #110
+#1991 1996 2007 2017 
+#  28   40   18   24  
+table(gp3$year) #9
+#1991 1996 2007 2017 
+#   6    4    9    4  
+
+gp1$group<-"Group1"
+gp2$group<-"Group2"
+gp3$group<-"Group3"
+c20<-rbind(gp1,gp2,gp3)
+write.csv(c20, "../Output/PCA/PWSonly_with.groups_pca_chr20.csv")
+
+pcols<-c("#d7b5d8","#df65b0","#dd1c77","#980043")
+ggplot()+
+        geom_point(data = c20, aes(x = PC1, y = PC2, fill = factor(year), color = factor(year), shape = factor(year)), size = 3)+
+        scale_shape_manual(values=c(23,25,3,21), guide="none")+
+        scale_fill_manual(values=paste0(pcols,"99"), guide="none")+
+        scale_color_manual(values=pcols[1:4])+
+        xlab(paste("PC 1"))+
+        ylab(paste("PC 2"))+
+        theme_bw()+
+        ggtitle("Chr20")+
+        guides(shape = guide_legend(override.aes =c(23,25,3,21)), fill=guide_legend(override.aes =paste0(pcols,"99")))+theme(legend.title = element_blank())+
+     stat_ellipse(data=c20[c20$group!="Group2",], aes(x=PC1, y=PC2, group=group), color="gray50", size=0.2,level=0.99)+
+     geom_ellipse(aes(x0=-0.05, y0=0.08,  angle=-20.15, a=0.22, b=0.05), color="gray50", size=0.2)+geom_path()+
+    annotate("text", x=0.05, y=0.2, label="Group 1")+
+    annotate("text", x=-0.1, y=0.32, label="Group 2")+
+    annotate("text", x=-0.22, y=-0.2, label="Group 3")
+ggsave("../Output/PCA/PWSonly_Ch20_PCA_withGroups.png", width = 6, height = 4.5, dpi=300)
+#TB is in 1 group
+```
+![](../Output/PCA/PWSonly_Ch20_PCA_withGroups.png){width=70%}
+
+### Porportion of each groups per year 
+
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+#Create a summary
+ch20_summary<-data.frame(year=c(1991,1996,2007,2017))
+ch20_summary$Group1<-as.vector(table(gp1$year))
+ch20_summary$Group2<-as.vector(table(gp2$year))
+ch20_summary$Group3<-as.vector(table(gp3$year))
+
+ch20_summary$Group1<-as.vector(table(c20$year[c20$group=="Group1"]))
+ch20_summary$Group2<-as.vector(table(c20$year[c20$group=="Group2"]))
+ch20_summary$Group3<-as.vector(table(c20$year[c20$group=="Group3"]))
+
+#matrix to be tested
+X<-ch20_summary[,2:4]
+rownames(X)<-ch20_summary$year
+#quick chi-square test 
+chisq.test(ch20_summary[,2:4])
+#X-squared = 9.0619, df = 6, p-value = 0.1701
+
+chisq.test(ch20_summary[c(2,3),2:4]) #PWS95 vs. PWS17
+#X-squared = 6.582, df = 2, p-value = 0.03722
+#bonferroni correction 0.05/12= 0.004166667
+library(chisq.posthoc.test)
+#Run post-hoc analysis
+chisq.posthoc.test(t(X), method = "bonferroni")
+# Dimension     Value       1991       1996       2007       2017
+#1    Group1 Residuals -0.2299118 -0.7816124 -0.2095164  1.2728792
+#2    Group1  p values  1.0000000  1.0000000  1.0000000  1.0000000
+#3    Group2 Residuals  0.1518228  1.6660207 -1.2565640 -0.7840416
+#4    Group2  p values  1.0000000  1.0000000  1.0000000  1.0000000
+#5    Group3 Residuals  0.1268371 -1.4900885  2.4462947 -0.7966345
+#6    Group3  p values  1.0000000  1.0000000  0.1732000  1.0000000
+
+c20m<-melt(ch20_summary, id.vars="year")
+ggplot(c20m, aes(x=factor(year), y=value, fill=variable))+
+    geom_bar(stat="identity", width=0.5, color="gray40",position = "fill")+
+    theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
+    scale_fill_manual(values=c("#fbb4ae","#b3cde3","#ccebc5"))+xlab("Year")+ggtitle("PWS Chr20")
+ggsave("../Output/PCA/PWS_ch20_prop_indivi_in3groups.png", width = 6, height = 4, dpi=150)
+```
+![](../Output/PCA/PWS_ch20_prop_indivi_in3groups.png){width=70%}
+
+### Calcualte Fst/Dxy between Groups across years within chr20
+
+```{r eval=FALSE, message=TRUE, warning=FALSE}
+# read chr20 from the 'PWSonly' file
+# Subset VCF by chr20 
+#bcftools view  /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz --regions chr20 > /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf
+
+
+pws <- readData("../Data/new_vcf/PWSonly/PWSonly_chr20/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-pop_info[pop_info$pop=="PWS",]
+
+#assign groups
+pops$group<-"Group1"
+pops$group[pops$Sample %in% gp2$Sample]<-"Group2"
+pops$group[pops$Sample %in% gp3$Sample]<-"Group3"
+populations <- split(pops$Sample, pops$group)
+pws<-set.populations(pws, populations, diploid = T)
+
+# set the chromosome size
+chrsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+chr<-chrsize$V3[chrsize$V1=="chr20"]
+
+# make a sliding window dataset
+pws_sw <- sliding.window.transform(pws, width = 50000, jump = 10000, type = 2)
+# crate sliding window info
+windows<-pws_sw@region.names
+windows<-gsub(" ","", windows)
+windows<-gsub(":","",windows)
+window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+#calculate diversity stats
+pws_sw <- diversity.stats(pws_sw, pi = TRUE)
+pws_sw <- F_ST.stats(pws_sw, mode = "nucleotide")
+# extract nucleotide diversity and correct for window size
+nd <- pws_sw@nuc.diversity.within/50000
+# make group name vector and rename the columns
+groupnames <- sort(unique(pops$group))
+colnames(nd) <- paste0(groupnames, "_pi")
+# extract fst values
+fst <- t(pws_sw@nuc.F_ST.pairwise)
+# extract dxy - pairwise absolute nucleotide diversity
+dxy <- get.diversity(pws_sw, between = T)[[2]]/50000
+# set the column names 
+x <- colnames(fst)
+x <- sub("pop1", groupnames[1], x)
+x <- sub("pop2", groupnames[2], x)
+x <- sub("pop3", groupnames[3], x)
+x <- sub("/", "_", x)
+
+colnames(fst)<-paste0("fst_",x)
+colnames(dxy)<-paste0("dxy_",x)
+
+#combine all data
+pws_data <- as_tibble(data.frame(window, nd, fst, dxy))
+write.csv(pws_data,"../Output/PCA/PWSonly_chr20_popgenome_stats.csv")
+
+comb<-combn(groupnames, 2)
+comb<-t(comb)
+for (i in 1: nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        dt<-pws_data[, c("mid", paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2), paste0(pop1,"_pi"),paste0(pop2,"_pi")) ]
+        colnames(dt)[2:3]<-c("Fst","Dxy")
+    
+        dt_g<-gather(dt, -mid, key = "stat", value = "value")
+        dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy",colnames(dt)[4], colnames(dt)[5]))
+        ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr20 ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, chr,1 ))
+        ggsave(paste0("../Output/PCA/PWSonly_Diversity_stats_chr20_",pop1," vs.", pop2,".png"), width = 9, height = 4, dpi=150)
+    }
+```
+![](../Output/PCA/PWSonly_Diversity_stats_chr20_Group1 vs.Group2.png){width=75%}
+
+![](../Output/PCA/PWSonly_Diversity_stats_chr20_Group1 vs.Group3.png){width=75%}
+![](../Output/PCA/PWSonly_Diversity_stats_chr20_Group2 vs.Group3.png){width=75%}
+
+ **• What separates PWS groups are not the inversion, but the end of the choromsome (>21.8Mb) **
+<br>
+
+### Compare the heterozygosity of the region of interest (region 2)
+
+```{R eval=FALSE}
+# 1 divide the vcf into 3 groups -create the sample list for each group
+write.table(gp1$Sample, "../Data/new_vcf/PWSonly/pwsch20_group1.txt", quote = F, row.names = F, col.names = F)
+write.table(gp2$Sample, "../Data/new_vcf/PWSonly/pwsch20_group2.txt", quote = F, row.names = F, col.names = F)
+write.table(gp3$Sample, "../Data/new_vcf/PWSonly/pwsch20_group3.txt", quote = F, row.names = F, col.names = F)
+```
+
+```{bash eval=FALSE, include=TRUE}
+#Calculate heterozygosity per window using bcftools 
+# 1. subset VCF by chr20 (het_stats_PWS.ch20.sh)
+bcftools view  /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz --regions chr20 > /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf
+bgzip /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf
+bcftools index /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf.gz
+
+#2. subset by groups (This process can be done in R to group individuals)
+bcftools view -Oz -S /home/ktist/ph/data/new_vcf/MD7000/population/pwsch20_group1.txt --threads 16 /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/PWSonly_chr20_group1_maf05.vcf.gz 
+bcftools view -Oz -S /home/ktist/ph/data/new_vcf/MD7000/population/pwsch20_group2.txt --threads 16 /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/PWSonly_chr20_group2_maf05.vcf.gz 
+bcftools view -Oz -S /home/ktist/ph/data/new_vcf/MD7000/population/pwsch20_group3.txt --threads 16 /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/PWSonly_chr20_group3_maf05.vcf.gz 
+
+bcftools index /home/ktist/ph/data/new_vcf/MD7000/PWSonly_chr20_group3_maf05.vcf.gz 
+bcftools index /home/ktist/ph/data/new_vcf/MD7000/PWSonly_chr20_group2_maf05.vcf.gz 
+bcftools index /home/ktist/ph/data/new_vcf/MD7000/PWSonly_chr20_group1_maf05.vcf.gz 
+
+#3. Run het_stats20group1.sh to calculate het in windows
+#4. cat all windows in to one file
+d /home/ktist/ph/data/new_vcf/MD7000/population/ch20group1/
+for f in *; do sed -i "s/$/\t$f/" $f; done 
+cat $(ls -t) > pws_ch20_group1_statsFile
+cd /home/ktist/ph/data/new_vcf/MD7000/population/ch20group2/
+for f in *; do sed -i "s/$/\t$f/" $f; done 
+cat $(ls -t) > pws_ch20_group2_statsFile
+cd /home/ktist/ph/data/new_vcf/MD7000/population/ch20group3/
+for f in *; do sed -i "s/$/\t$f/" $f; done 
+cat $(ls -t) > pws_ch20_group3_statsFile
+```
+
+
+### Process the stats file to calculate Ho and He
+```{r echo=TRUE, message=FALSE, warning=FALSE, eval=FALSE}
+# Calculate Ho and He from bcftools stats output files (stats from PWSonly files)
+sfiles<-list.files("../Data/new_vcf/PWSonly/", pattern=paste0("_ch20_group\\d_statsFile"))
+
+
+ho<- data.frame()
+for (i in 1:length(sfiles)){
+    df<-read.table(paste0("../Data/new_vcf/PWSonly/", sfiles[i]), sep="\t", header=F)
+    pname<-paste0("group",i)
+    df<-df[,c(3:10, 14:15)]
+    colnames(df)<-c("Sample","nRefHom","nNonRefHom","nHets", "nTransitions", "nTransversions","nIndels","average depth","nMissing","window_no")
+    df$p<-(2*df$nRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$q<-(2*df$nNonRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    
+    df$He<-2*df$p*df$q
+    df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
+    
+    df$Group<-paste0("Group",i)
+    ho<-rbind(df,ho)
+}
+Ho<-aggregate(ho[,"Ho"], by=list(ho$window_no,ho$Group), mean )
+He<-aggregate(ho[,"He"], by=list(ho$window_no,ho$Group), mean )
+het<-cbind(Ho, He$x)
+colnames(het)<-c("window_id","Group","Ho","He")
+write.csv(het,paste0("../Output/Stats_window/PWSonly_chr20_Hetero_bygroup_maf05.csv"))
+    
+het$window<-as.integer(gsub(paste0("pws_ch20_group\\d_maf05_stats_"),'',het$window_id))
+het$loc<-"region1"
+het$loc[het$window>215]<-"region2"
+    
+groupHo<-aggregate(het[,"Ho"], by=list(het$Group, het$loc), mean , na.rm=T)
+colnames(groupHo)<-c("Group","Region","Ho")
+write.csv(groupHo, "../Output/Stats_window/PWSonly_chr20_Hetero_group_summary.csv")
+```
+
+### Compare Heterozygosity levels among groups and between regions
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Create a figure
+gcols<-c("#FB687B","#48ABE3","#75BA76")
+ggplot()+
+    geom_boxplot(data=het,aes(x=loc, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    geom_point(data=groupHo, aes(x=Region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=gcols)+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')+ggtitle("Chr20")
+ggsave("../Output/PCA/PWS_Chr20_Ho.in.tworegions.png", width = 6, height = 4, dpi=300)
+```
+![](../Output/PCA/PWS_Chr20_Ho.in.tworegions.png){width=60%}  
+
+### Look at the overlap of individuals in Group3/Group2 among Chr20, Chr15 and Chr8 (PWSonly)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#ch15 adn ch8 groupings are the same for PWSonly and PWS+other pops
+c15<-read.csv("../Output/PCA/chr15_PCAgroups.csv", row.names = 1)
+c15<-c15[c15$pop=="PWS",]
+c8<-read.csv("../Output/PCA/PWSonly_with.groups_pca_chr8.csv", row.names = 1)
+
+c15g3<-c15$Sample[c15$Group=="Group3"]
+c8g3<-c8$Sample[c8$group=="Group3"]
+c20g3<-c20$Sample[c20$group=="Group3"]
+x<-list(chr8=c8g3,chr15=c15g3, chr20=c20g3)
+p3<-ggvenn(x, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+
+c15g2<-c15$Sample[c15$Group=="Group2"]
+c8g2<-c8$Sample[c8$group=="Group2"]
+c20g2<-c20$Sample[c20$group=="Group2"]
+x2<-list(chr8=c8g2,chr15=c15g2, chr20=c20g2)
+p2<-ggvenn(x2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+
+venn<-ggdraw()+
+        draw_plot(p2,x=0,y=0,width=0.5,height=1)+
+        draw_plot(p3,0.5,0,0.5,1)+
+        draw_plot_label("PWS", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch8.15.20.group_overlap.png"), plot = venn,base_width = 7, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch8.15.20.group_overlap.png)
+
+<br>
+
+## Chr20 groups across all populations
+
+![](../Output/chr/chr20_noTB.png){width=40%}![](../Output/chr/ch20_PWS.png){width=40%}
+
+### Compare 3 groups separated by PC1 ('Inversion Gropus')
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#proportion of year in each group
+chr20<-read.csv("../Output/chr/DP7000/chr20_PCAgroups.csv")
+#group3 is group1 (1==the most majority in new grouping)
+chr20$Group[chr20$Group==1]<-"Group3"
+chr20$Group[chr20$Group==3]<-"Group1"
+chr20$Group[chr20$Group==2]<-"Group2"
+
+chr20_sum<-data.frame(table(chr20$Group,chr20$yr.pop))
+colnames(chr20_sum)<-c("Group","yr.pop","Freq")
+
+chr20_sum$yr.pop<-factor(chr20_sum$yr.pop, levels=c("PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+ggplot(chr20_sum, aes(x=yr.pop, y=Freq, fill=Group))+
+    geom_bar(stat="identity", width=0.8, color="gray40",position = "fill")+
+    theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
+    scale_fill_manual(values=c("#fbb4ae","#b3cde3","#ccebc5"))+xlab("")+ggtitle("Chr20")
+ggsave("../Output/PCA/Ch20_prop_indivi_in3groups.png", width = 7, height = 4, dpi=300)
+```
+![](../Output/PCA/Ch20_prop_indivi_in3groups.png){width=70%}
+
+### Calcualte Fst between Groups within chr20 for all pops (except TB)
+
+```{r echo=TRUE, message=TRUE, warning=FALSE}
+ph <- readData("../Data/new_vcf/ch20/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-pop_info[pop_info$pop!="TB",]
+
+#assign groups
+pops$group<-"Group1"
+pops$group[pops$Sample %in% chr20$Sample[chr20$Group=="Group2"]]<-"Group2"
+pops$group[pops$Sample %in% chr20$Sample[chr20$Group=="Group3"]] <-"Group3"
+populations <- split(pops$Sample, pops$group)
+ph<-set.populations(ph, populations, diploid = T)
+
+# set the chromosome size
+chrsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+chr<-chrsize$V3[chrsize$V1=="chr20"]
+
+# make a sliding window dataset
+ph_sw <- sliding.window.transform(ph, width = 50000, jump = 10000, type = 2)
+# crate sliding window info
+windows<-ph_sw@region.names
+windows<-gsub(" ","", windows)
+windows<-gsub(":","",windows)
+window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+#calculate diversity stats
+ph_sw <- diversity.stats(ph_sw, pi = TRUE)
+ph_sw <- F_ST.stats(ph_sw, mode = "nucleotide")
+# extract nucleotide diversity and correct for window size
+nd <- ph_sw@nuc.diversity.within/50000
+# make group name vector and rename the columns
+groupnames <- sort(unique(pops$group))
+colnames(nd) <- paste0(groupnames, "_pi")
+# extract fst values
+fst <- t(ph_sw@nuc.F_ST.pairwise)
+# extract dxy - pairwise absolute nucleotide diversity
+dxy <- get.diversity(ph_sw, between = T)[[2]]/50000
+# set the column names 
+x <- colnames(fst)
+x <- sub("pop1", groupnames[1], x)
+x <- sub("pop2", groupnames[2], x)
+x <- sub("pop3", groupnames[3], x)
+x <- sub("/", "_", x)
+
+colnames(fst)<-paste0("fst_",x)
+colnames(dxy)<-paste0("dxy_",x)
+
+#combine all data
+ph_data <- as_tibble(data.frame(window, nd, fst, dxy))
+write.csv(ph_data,"../Output/PCA/PH_noTB_chr20_popgenome_stats.csv")
+
+comb<-combn(groupnames, 2)
+comb<-t(comb)
+for (i in 1:nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        dt<-ph_data[, c("mid", paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2), paste0(pop1,"_pi"),paste0(pop2,"_pi")) ]
+        colnames(dt)[2:3]<-c("Fst","Dxy")
+    
+        dt_g<-gather(dt, -mid, key = "stat", value = "value")
+        dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy",colnames(dt)[4], colnames(dt)[5]))
+        ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr20 ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, chr,1 ))
+        ggsave(paste0("../Output/PCA/Ch20_Diversity_stats_",pop1,".vs.", pop2,".png"), width = 9, height = 4, dpi=150)
+    }
+```
+![](../Output/PCA/Ch20_Diversity_stats_Group1.vs.Group2.png){width=70%}
+![](../Output/PCA/Ch20_Diversity_stats_Group1.vs.Group3.png){width=70%}
+![](../Output/PCA/Ch20_Diversity_stats_Group2.vs.Group3.png){width=70%}
+
+
+### How the grouping overlap between 'all-pop' vs. 'PWSonly'?
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# c20= PWSonly chr20 +allpops
+
+chr20$Sample[chr20$Group=="Group3"&chr20$pop=="PWS"] #1 sample ('0590_PWS91')
+g2_a<-chr20$Sample[chr20$Group=="Group2"&chr20$pop=="PWS"] #25 samples
+#[1] "0367_PWS07" "0412_PWS07" "0560_PWS07" "1146_PWS07" "1148_PWS07" "1150_PWS07" "0475_PWS17" "0652_PWS17"
+#[9] "0956_PWS17" "0958_PWS17" "0978_PWS17" "0984_PWS17" "1034_PWS17" "1036_PWS17" "1037_PWS17" "0564_PWS91"
+#[17] "0671_PWS91" "0700_PWS91" "1203_PWS91" "1207_PWS91" "0755_PWS96" "0757_PWS96" "0961_PWS96" "1079_PWS96"
+#[25] "1116_PWS96"
+g3_p<-c20$Sample[c20$group=="Group3"] #23 individuals
+g2_p<-c20$Sample[c20$group=="Group2"] #110 samples
+
+#Do pws-group3 samples belong to all-group3?
+#
+g3_p[g3_p %in% g2_a] #only 3 samples from Group3_PWS belogn to group2-All
+#"0956_PWS17" "0652_PWS17" "0700_PWS91"
+g2_p[g2_p %in% g2_a] #14 samples from Group2_PWS belong to Group2_All
+#[1] "0367_PWS07" "0560_PWS07" "1146_PWS07" "1148_PWS07" "0475_PWS17" "0958_PWS17" "0984_PWS17" "1036_PWS17"
+#[9] "1037_PWS17" "0564_PWS91" "0671_PWS91" "0755_PWS96" "0961_PWS96" "1116_PWS96"
+
+
+#different grouping (vertical(PC2) vs. horizontal (PC1) clustering)
+#Create new groups separated along PC2 ->call 'clusters'
+
+pca20<-read.csv("../Output/PCA/noTB_pca_chr20.csv")
+c3.1<-pca20[pca20$PC2>0.06&pca20$PC1<0.05,] #46
+c3.2<-pca20[pca20$PC2>0.01&pca20$PC1>0.0509,] #23
+c3.3<-pca20[pca20$PC2>(-0.03)&pca20$PC1>0.12,] #19 CA inversion
+
+c2.1<-pca20[pca20$PC2>(-0.011)&pca20$PC2<0.06&pca20$PC1>(-0.02)&pca20$PC1<0.01,] #216
+c2.2<-pca20[pca20$PC2>(-0.05)&pca20$PC2<0.035&pca20$PC1>(0.015)&pca20$PC1<0.079,] #37
+c2.3<-pca20[pca20$PC2>(-0.1)&pca20$PC2<(-0.07)&pca20$PC1>(0.1),] #12
+
+c1.1<-pca20[pca20$PC2<(-0.011)&pca20$PC1<0.0,] #241
+c1.2<-pca20[pca20$PC2<(-0.05)&pca20$PC2<0.035&pca20$PC1>0&pca20$PC1<0.05,] #26
+c1.3<-pca20[pca20$PC2<(-0.1)&pca20$PC1>(0.1),] #1
+
+pca20$Cluster<-1
+pca20$Subcluster<-1.1
+pca20$Subcluster[pca20$Sample %in% c1.2$Sample]<-1.2
+pca20$Subcluster[pca20$Sample %in% c1.3$Sample]<-1.3
+
+pca20$Cluster[pca20$Sample %in% c(c2.1$Sample,c2.2$Sample,c2.3$Sample)]<-2
+pca20$Subcluster[pca20$Sample %in% c2.1$Sample]<-2.1
+pca20$Subcluster[pca20$Sample %in% c2.2$Sample]<-2.2
+pca20$Subcluster[pca20$Sample %in% c2.3$Sample]<-2.3
+
+pca20$Cluster[pca20$Sample %in% c(c3.1$Sample,c3.2$Sample,c3.3$Sample)]<-3
+pca20$Subcluster[pca20$Sample %in% c3.1$Sample]<-3.1
+pca20$Subcluster[pca20$Sample %in% c3.2$Sample]<-3.2
+pca20$Subcluster[pca20$Sample %in% c3.3$Sample]<-3.3
+
+#pca20$Grouping<-1
+#pca20$Group[pca20$Sample %in% c(c1.2$Sample,c2.2$Sample,c3.2$Sample)]<-2
+#pca20$Group[pca20$Sample %in% c(c1.3$Sample,c2.3$Sample,c3.3$Sample)]<-2
+
+pca20<-merge(pca20, chr20[,c("Sample","Group","yr.pop")], by="Sample")
+write.csv(pca20,"../Output/PCA/chr20_group_cluster.csv", row.names=F)
+
+#create colors based on cluster
+ccols<-c("#fd8d3c","#fdbe85","#fdd49e","#3182bd","#6baed6","#9ecae1","#df65b0","#c994c7","#d4b9da")
+
+
+ggplot()+
+        geom_point(data = pca20, aes(x = PC1, y = PC2, color = factor(Subcluster), fill = factor(Subcluster), shape = factor(year)), size = 3)+
+        scale_shape_manual(values=c(23,25,3,3,21), name="Year")+
+        scale_fill_manual(values=paste0(ccols,"66"), guide="none")+
+        scale_color_manual(values=ccols, name="Population")+
+        theme_bw()+theme(legend.title = element_blank())+
+        stat_ellipse(data=pca20, aes(x=PC1, y=PC2, group=factor(Subcluster)), color="gray50", size=0.2,level=0.999)
+ggsave("../Output/PCA/Chr20_Cluster.subcluster.png", width = 6, height = 4.5, dpi=300)
+```
+![](../Output/PCA/Chr20_Cluster.subcluster.png){width=60%}
+
+### Look at Fst between Clusters (separted by PC2) within chr20 for all pops
+
+```{r eval=FALSE, message=TRUE, warning=FALSE}
+ph <- readData("../Data/new_vcf/ch20/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-pop_info[pop_info$pop!="TB",]
+
+#assign groups
+pops$group<-"Cluster1"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Cluster==2]] <-"Cluster2"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Cluster==3]] <-"Cluster3"
+populations <- split(pops$Sample, pops$group)
+ph<-set.populations(ph, populations, diploid = T)
+
+# set the chromosome size
+chrsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+chr<-chrsize$V3[chrsize$V1=="chr20"]
+
+# make a sliding window dataset
+ph_sw <- sliding.window.transform(ph, width = 50000, jump = 10000, type = 2)
+# crate sliding window info
+windows<-ph_sw@region.names
+windows<-gsub(" ","", windows)
+windows<-gsub(":","",windows)
+window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+#calculate diversity stats
+ph_sw <- diversity.stats(ph_sw, pi = TRUE)
+ph_sw <- F_ST.stats(ph_sw, mode = "nucleotide")
+# extract nucleotide diversity and correct for window size
+nd <- ph_sw@nuc.diversity.within/50000
+# make group name vector and rename the columns
+groupnames <- sort(unique(pops$group))
+colnames(nd) <- paste0(groupnames, "_pi")
+# extract fst values
+fst <- t(ph_sw@nuc.F_ST.pairwise)
+# extract dxy - pairwise absolute nucleotide diversity
+dxy <- get.diversity(ph_sw, between = T)[[2]]/50000
+# set the column names 
+x <- colnames(fst)
+x <- sub("pop1", groupnames[1], x)
+x <- sub("pop2", groupnames[2], x)
+x <- sub("pop3", groupnames[3], x)
+x <- sub("/", "_", x)
+
+colnames(fst)<-paste0("fst_",x)
+colnames(dxy)<-paste0("dxy_",x)
+
+#combine all data
+ph_data <- as_tibble(data.frame(window, nd, fst, dxy))
+write.csv(ph_data,"../Output/PCA/PH_noTB_chr20_Clusters_popgenome_stats.csv")
+
+comb<-combn(groupnames, 2)
+comb<-t(comb)
+for (i in 1:nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        dt<-ph_data[, c("mid", paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2), paste0(pop1,"_pi"),paste0(pop2,"_pi")) ]
+        colnames(dt)[2:3]<-c("Fst","Dxy")
+    
+        dt_g<-gather(dt, -mid, key = "stat", value = "value")
+        dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy",colnames(dt)[4], colnames(dt)[5]))
+        ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr20 ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, chr,1 ))
+        ggsave(paste0("../Output/PCA/Ch20_Diversity_stats_",pop1,".vs.", pop2,".png"), width = 9, height = 4, dpi=150)
+}
+```
+![](../Output/PCA/Ch20_Diversity_stats_Cluster1.vs.Cluster2.png){width=70%}
+
+![](../Output/PCA/Ch20_Diversity_stats_Cluster1.vs.Cluster3.png){width=70%}
+
+
+![](../Output/PCA/Ch20_Diversity_stats_Cluster2.vs.Cluster3.png){width=70%}
+
+### Check PWSonly groups matches cluster nubmers  
+```{r}
+pws20<-pca20[pca20$pop=="PWS",]
+pws20<-merge(pws20[,c(1:5,12:13,15)], c20[,c("Sample","group")], by="Sample")
+pws20$Group<-as.integer(gsub("Group", '',pws20$group))
+pws20$match<-ifelse(pws20$Cluster==pws20$Group, 0, 1)
+pws20[pws20$match==1,]
+
+
+```
+
+```{r eval=FALSE, message=TRUE, warning=FALSE}
+ph <- readData("../Data/new_vcf/ch20/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-pop_info[pop_info$pop!="TB",]
+#assign groups
+pops$group<-"Cluster1.1"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Subcluster==1.2]] <-"Cluster1.2"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Subcluster==1.3]] <-"Cluster2.3"#group with cluster2.3 since 1 sample
+pops$group[pops$Sample %in% pca20$Sample[pca20$Subcluster==2.1]] <-"Cluster2.1"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Subcluster==2.2]] <-"Cluster2.2"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Subcluster==2.3]] <-"Cluster2.3"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Subcluster==3.1]] <-"Cluster3.1"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Subcluster==3.2]] <-"Cluster3.2"
+pops$group[pops$Sample %in% pca20$Sample[pca20$Subcluster==3.3]] <-"Cluster3.3"
+
+populations <- split(pops$Sample, pops$group)
+ph<-set.populations(ph, populations, diploid = T)
+
+# set the chromosome size
+chrsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+chr<-chrsize$V3[chrsize$V1=="chr20"]
+
+# make a sliding window dataset
+ph_sw <- sliding.window.transform(ph, width = 50000, jump = 10000, type = 2)
+# crate sliding window info
+windows<-ph_sw@region.names
+windows<-gsub(" ","", windows)
+windows<-gsub(":","",windows)
+window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+#calculate diversity stats
+ph_sw <- diversity.stats(ph_sw, pi = TRUE)
+ph_sw <- F_ST.stats(ph_sw, mode = "nucleotide")
+groupnames <- sort(unique(pops$group))
+fst <- t(ph_sw@nuc.F_ST.pairwise)
+dxy <- get.diversity(ph_sw, between = T)[[2]]/50000
+# set the column names 
+x <- colnames(fst)
+for (i in 1:length(x)){
+    x <- sub(paste0("pop",i), groupnames[i], x)
+}
+x <- sub("/", "_", x)
+
+colnames(fst)<-paste0("fst_",x)
+colnames(dxy)<-paste0("dxy_",x)
+
+#combine all data
+ph_data2 <- as_tibble(data.frame(window, nd, fst, dxy))
+write.csv(ph_data2,"../Output/PCA/PH_noTB_chr20_Subclusters_popgenome_stats.csv")
+
+comb<-combn(groupnames, 2)
+comb<-t(comb)
+for (i in 1:nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        dt<-ph_data2[, c("mid", paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2)) ]
+        colnames(dt)[2:3]<-c("Fst","Dxy")
+    
+        dt_g<-gather(dt, -mid, key = "stat", value = "value")
+        dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy",colnames(dt)[4], colnames(dt)[5]))
+        ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr20 ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, chr,1 ))
+        ggsave(paste0("../Output/PCA/chr20/Ch20_Diversity_stats_",pop1,".vs.", pop2,".png"), width = 8, height = 2, dpi=150)
+}
+```
+
+#### Subclusters within the Cluster are based on the inversion
+
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster1.1.vs.Cluster1.2.png){width=40%}  
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster2.1.vs.Cluster2.2.png){width=40%}
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster2.1.vs.Cluster2.3.png){width=40%}
+
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster3.1.vs.Cluster3.3.png){width=40%}
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster3.2.vs.Cluster3.3.png){width=40%}
+
+#### between clusters are based on the region at the end of chromsome
+
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster1.1.vs.Cluster3.1.png){width=40%}
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster1.1.vs.Cluster2.1.png){width=40%}
+
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster2.1.vs.Cluster2.2.png){width=40%}
+![](../Output/PCA/chr20/Ch20_Diversity_stats_Cluster2.3.vs.Cluster3.3.png){width=40%}
+
+
+<br>
+
+### Create a stacked bar-chart for clusters
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pca20<-read.csv("../Output/PCA/chr20_group_cluster.csv")
+
+pca20_sum<-data.frame(table(pca20$Subcluster,pca20$yr.pop))
+colnames(pca20_sum)<-c("Cluster","yr.pop","Freq")
+pca20_sum$headCluster<-substr(pca20_sum$Cluster, 1,1)
+
+pca20_sum$yr.pop<-factor(pca20_sum$yr.pop, levels=c("PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+
+#1. Groping only (not the inversion cluster)
+
+chr20_cl<-data.frame(table(pca20$Cluster,pca20$yr.pop))
+colnames(chr20_cl)<-c("Cluster","yr.pop","Freq")
+chr20_cl$yr.pop<-factor(chr20_cl$yr.pop, levels=c("PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+ggplot(chr20_cl, aes(x=yr.pop, y=Freq, fill=Cluster))+
+    geom_bar(stat="identity", width=0.8, color="gray40",position = "fill")+
+    theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
+    scale_fill_manual(values=c("#fbb4ae","#b3cde3","#ccebc5"))+xlab("")+ggtitle("Chr20 Groping (non-inversion)")
+ggsave("../Output/PCA/Ch20_prop_indivi_in3groups.nonInversion.png", width = 7, height = 4, dpi=300)
+
+
+#create colors based on cluster
+ccols<-c("#fd8d3c","#fdbe85","#fdd49e","#3182bd","#6baed6","#9ecae1","#df65b0","#c994c7","#d4b9da")
+
+ggplot(pca20_sum, aes(x=yr.pop, y=Freq, fill=Cluster))+
+    geom_bar(stat="identity", width=0.8, color="gray40",position = "fill")+
+    theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
+    scale_fill_manual(values=ccols)+xlab("")+ggtitle("Chr20")
+ggsave("../Output/PCA/Ch20_prop_indivi_inClusters.png", width = 7, height = 4, dpi=300)
+```
+
+![](../Output/PCA/Ch20_prop_indivi_in3groups.nonInversion.png){width=60%}
+
+
+![](../Output/PCA/Ch20_prop_indivi_inClusters.png){width=60%}
+![](../Output/PCA/Chr20_Cluster.subcluster_withNames.png){width=30%}    
+
+<br>
+<br>
+
+# Chr4   
+
+## PCA clusters into 3 groups for PWSonly, but not so clear when all populations are incldued
+![](../Output/chr/ch4_all.png){width=30%} ![](../Output/chr/ch4_noTB.png){width=30%}
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#proportion of year in each group
+ch4<-read.csv("../Output/PCA/PWSonly_pca_chr4.csv")
+gp1.1<-ch4[ch4$PC1>0.02,]
+gp1.2<-ch4[ch4$PC1>(-0.02)&ch4$PC2<0,]
+gp1.2<-gp1.2[!(gp1.2$Sample%in% gp1.1$Sample),]
+gp1<-rbind(gp1.1, gp1.2)
+
+gp3.1<-ch4[ch4$PC1<(-0.09)&ch4$PC2>(-0.06),]
+gp3.2<-ch4[ch4$PC1<(-0.2)&ch4$PC2<(-0.1),]
+gp3<-rbind(gp3.1,gp3.2)
+gp2<-ch4[!(ch4$Sample %in% c(gp1$Sample, gp3$Sample)),  ]
+
+table(gp1$year) #127
+#1991 1996 2007 2017 
+#  32   37   29   29  
+table(gp2$year) #88
+#1991 1996 2007 2017 
+#  20   29   14   25   
+table(gp3$year) #17
+#1991 1996 2007 2017 
+#   6    6    3    2  
+
+gp1$group<-"Group1"
+gp2$group<-"Group2"
+gp3$group<-"Group3"
+c4<-rbind(gp1,gp2,gp3)
+write.csv(c4, "../Output/PCA/PWSonly_with.groups_pca_chr4.csv")
+
+pcols<-c("#d7b5d8","#df65b0","#dd1c77","#980043")
+ggplot()+
+        geom_point(data = c4, aes(x = PC1, y = PC2, fill = factor(year), color = factor(year), shape = factor(year)), size = 3)+
+        scale_shape_manual(values=c(23,25,3,21), guide="none")+
+        scale_fill_manual(values=paste0(pcols,"99"), guide="none")+
+        scale_color_manual(values=pcols[1:4])+
+        xlab(paste("PC 1"))+
+        ylab(paste("PC 2"))+
+        theme_bw()+
+        ggtitle("Chr4")+
+        guides(shape = guide_legend(override.aes =c(23,25,3,21)), fill=guide_legend(override.aes =paste0(pcols,"99")))+theme(legend.title = element_blank())+
+        stat_ellipse(data=c4, aes(x=PC1, y=PC2, group=group), color="gray50", size=0.2,level=0.997)+
+         annotate("text", x=0.05, y=-0.2, label="Group 1")+
+    annotate("text", x=-0.08, y=-0.2, label="Group 2")+
+    annotate("text", x=-0.22, y=0.2, label="Group 3")
+ggsave("../Output/PCA/PWSonly_Ch4_PCA_withGroups.png", width = 6, height = 4.5, dpi=300)
+#TB is in 1 group for chr4
+```
+![](../Output/PCA/PWSonly_Ch4_PCA_withGroups.png){width=70%}
+
+### Create a grouping summary plot
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Create a summary
+ch4_summary<-data.frame(year=c(1991,1996,2007,2017))
+ch4_summary$Group1<-as.vector(table(gp1$year))
+ch4_summary$Group2<-as.vector(table(gp2$year))
+ch4_summary$Group3<-as.vector(table(gp3$year))
+
+#quick chi-square test 
+chisq.test(ch4_summary[,2:4])
+#X-squared = 4.3902, df = 6, p-value = 0.624
+
+
+c4m<-melt(ch4_summary, id.vars="year")
+ggplot(c4m, aes(x=factor(year), y=value, fill=variable))+
+    geom_bar(stat="identity", width=0.5, color="gray40",position = "fill")+
+    theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
+    scale_fill_manual(values=c("#fbb4ae","#b3cde3","#ccebc5"))+xlab("Year")+ggtitle("PWS Chr4")
+ggsave("../Output/PCA/PWS_ch4_prop_indivi_in3groups.png", width = 6, height = 4, dpi=150)
+```
+![](../Output/PCA/PWS_ch4_prop_indivi_in3groups.png){width=70%}
+
+### Calcualte Fst between Groups within chr4 (PWSonly)
+
+```{r eval=FALSE, message=TRUE, warning=FALSE}
+# read chr4 from the 'PWSonly' file
+# Subset VCF by chr20 
+#bcftools view  /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz --regions chr20 > /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf
+
+
+pws <- readData("../Data/new_vcf/PWSonly/PWSonly_chr4/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-pop_info[pop_info$pop=="PWS",]
+
+#assign groups
+pops$group<-"Group1"
+pops$group[pops$Sample %in% c4$Sample[c4$group=="Group2"]]<-"Group2"
+pops$group[pops$Sample %in% c4$Sample[c4$group=="Group3"]]<-"Group3"
+populations <- split(pops$Sample, pops$group)
+pws<-set.populations(pws, populations, diploid = T)
+
+# set the chromosome size
+chrsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+chr<-chrsize$V3[chrsize$V1=="chr4"]
+
+# make a sliding window dataset
+pws_sw <- sliding.window.transform(pws, width = 50000, jump = 10000, type = 2)
+# crate sliding window info
+windows<-pws_sw@region.names
+windows<-gsub(" ","", windows)
+windows<-gsub(":","",windows)
+window_start<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[1]))
+window_stop<-as.integer(sapply(windows, function(x) unlist(strsplit(x, "-"))[2]))
+window<-data.frame(start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+#calculate diversity stats
+pws_sw <- diversity.stats(pws_sw, pi = TRUE)
+pws_sw <- F_ST.stats(pws_sw, mode = "nucleotide")
+# extract nucleotide diversity and correct for window size
+nd <- pws_sw@nuc.diversity.within/50000
+# make group name vector and rename the columns
+groupnames <- sort(unique(pops$group))
+colnames(nd) <- paste0(groupnames, "_pi")
+# extract fst values
+fst <- t(pws_sw@nuc.F_ST.pairwise)
+# extract dxy - pairwise absolute nucleotide diversity
+dxy <- get.diversity(pws_sw, between = T)[[2]]/50000
+# set the column names 
+x <- colnames(fst)
+x <- sub("pop1", groupnames[1], x)
+x <- sub("pop2", groupnames[2], x)
+x <- sub("pop3", groupnames[3], x)
+x <- sub("/", "_", x)
+
+colnames(fst)<-paste0("fst_",x)
+colnames(dxy)<-paste0("dxy_",x)
+
+#combine all data
+pws_data <- as_tibble(data.frame(window, nd, fst, dxy))
+write.csv(pws_data,"../Output/PCA/PWSonly_chr4_popgenome_stats.csv")
+
+comb<-combn(groupnames, 2)
+comb<-t(comb)
+for (i in 1: nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        dt<-pws_data[, c("mid", paste0("fst_", pop1,"_",pop2),paste0("dxy_",pop1,"_",pop2), paste0(pop1,"_pi"),paste0(pop2,"_pi")) ]
+        colnames(dt)[2:3]<-c("Fst","Dxy")
+    
+        dt_g<-gather(dt, -mid, key = "stat", value = "value")
+        dt_g$stat<-factor(dt_g$stat, levels=c("Fst","Dxy",colnames(dt)[4], colnames(dt)[5]))
+        ggplot(dt_g, aes(mid/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr4 ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, chr,1 ))
+        ggsave(paste0("../Output/PCA/PWSonly_Diversity_stats_chr4_",pop1," vs.", pop2,".png"), width = 9, height = 4, dpi=150)
+    }
+```
+![](../Output/PCA/PWSonly_Diversity_stats_chr4_Group1 vs.Group2.png){width=75%}
+
+![](../Output/PCA/PWSonly_Diversity_stats_chr4_Group1 vs.Group3.png){width=75%}
+![](../Output/PCA/PWSonly_Diversity_stats_chr4_Group2 vs.Group3.png){width=75%}
+
+* **PWS groups are separated by theend of the choromsome (>27.3Mb)**
+
+
+### Compare the heterozygosity of the region of interest (region 2 >27.3Mb)
+
+```{bash eval=FALSE}
+#Calculate heterozygosity per window using bcftools 
+# 1. subset VCF by chr20 (het_stats_PWS.ch20.sh)
+bcftools view  /home/ktist/ph/data/new_vcf/MD7000/PWSonly_NS0.5_maf05.vcf.gz --regions chr4 > /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch20_maf05.vcf
+bgzip /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch4_maf05.vcf
+bcftools index /home/ktist/ph/data/new_vcf/MD7000/PWSonly_ch4_maf05.vcf.gz
+#2. Run het_stats4_PWS.sh to calculate het in windows
+#3. Change the files to tab-delimited and cat them
+for f in *; do sed -i "s/$/\t$f/" $f; done 
+cat $(ls -t) > PWSonly_ch4_maf05_statsFile
+```
+
+
+### Process the stats file to obtain Ho and He
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Calculate Ho and He from bcftools stats output files (stats from PWSonly files)
+df<-read.table("../Data/new_vcf/PWSonly/PWSonly_ch4_maf05_statsFile",sep="\t", header=F)
+df<-df[,c(3:10, 14:15)]
+colnames(df)<-c("Sample","nRefHom","nNonRefHom","nHets", "nTransitions", "nTransversions","nIndels","average depth","nMissing","window_no")
+df$p<-(2*df$nRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+df$q<-(2*df$nNonRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    
+df$He<-2*df$p*df$q
+df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
+ho<-merge(df, c4[,c("Sample","pop","year","group")], by="Sample")
+years<-c(1991,1996,2007,2017)
+
+Ho<-aggregate(ho[,"Ho"], by=list(ho$window_no,ho$group, ho$year), mean, na.rm=T )
+He<-aggregate(ho[,"He"], by=list(ho$window_no,ho$group, ho$year), mean, na.rm=T )
+het<-cbind(Ho, He$x)
+colnames(het)<-c("window_id","Group","year","Ho","He")
+write.csv(het,paste0("../Output/Stats_window/PWSonly_chr4_Hetero_byGroup.year_maf05.csv"))
+    
+het$window<-as.integer(gsub(paste0("PWS_ch4_stats_"),'',het$window_id))
+het$loc<-"region1"
+het$loc[het$window>273]<-"region2"
+    
+groupHo<-aggregate(het[,"Ho"], by=list(het$Group, het$loc, het$year), mean , na.rm=T)
+colnames(groupHo)<-c("Group","Region","Year","Ho")
+write.csv(groupHo, "../Output/Stats_window/PWSonly_chr4_Hetero_group_summary.csv")
+```
+
+### Compare Heterozygosity levels among groups and between regions
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Create a figure
+gcols<-c("#FB687B","#48ABE3","#75BA76")
+
+ggplot()+
+    geom_boxplot(data=het,aes(x=loc, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    geom_point(data=groupHo, aes(x=Region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    facet_wrap(~year)+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=gcols)+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')
+ggsave("../Output/PCA/PWS_Chr15_Ho.in.tworegions_byYears.png", width = 8, height = 7, dpi=300)
+
+#all years together
+groupHo2<-aggregate(het[,"Ho"], by=list(het$Group, het$loc), mean , na.rm=T)
+colnames(groupHo2)<-c("Group","Region","Ho")
+ggplot()+
+    geom_boxplot(data=het,aes(x=loc, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    geom_point(data=groupHo2, aes(x=Region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=gcols)+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')+ggtitle("Chr20")
+ggsave("../Output/PCA/PWS_Chr20_Ho.in.tworegions.png", width = 6, height = 4, dpi=300)
+
+```
+![](../Output/PCA/PWS_Chr20_Ho.in.tworegions.png){width=60%}
+
+![](../Output/PCA/PWS_Chr4_Ho.in.tworegions_byYears.png){width=70%}
+
+## Look at the overlap of individuals 
+### Beween Group3 & Group2 among Chr20, Chr15, Chr8, and Chr4 (PWSonly)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#ch15 adn ch8 groupings are the same for PWSonly and PWS+other pops
+c15<-read.csv("../Output/PCA/chr15_PCAgroups.csv", row.names = 1)
+c15<-c15[c15$pop=="PWS",]
+c8<-read.csv("../Output/PCA/PWSonly_with.groups_pca_chr8.csv", row.names = 1)
+
+c15g3<-c15$Sample[c15$Group=="Group3"]
+c8g3<-c8$Sample[c8$group=="Group3"]
+c20g3<-c20$Sample[c20$group=="Group3"]
+c4g3<-c4$Sample[c4$group=="Group3"]
+
+x<-list(chr4=c4g3, chr8=c8g3,chr15=c15g3, chr20=c20g3)
+p3<-ggvenn(x, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+
+c15g2<-c15$Sample[c15$Group=="Group2"]
+c8g2<-c8$Sample[c8$group=="Group2"]
+c20g2<-c20$Sample[c20$group=="Group2"]
+c4g2<-c4$Sample[c4$group=="Group2"]
+
+x2<-list(chr4=c4g2, chr8=c8g2,chr15=c15g2, chr20=c20g2)
+p2<-ggvenn(x2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+
+c15g1<-c15$Sample[c15$Group=="Group1"]
+c8g1<-c8$Sample[c8$group=="Group1"]
+c20g1<-c20$Sample[c20$group=="Group1"]
+c4g1<-c4$Sample[c4$group=="Group1"]
+x1<-list(chr4=c4g1, chr8=c8g1,chr15=c15g1, chr20=c20g1)
+p1<-ggvenn(x1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+
+venn<-ggdraw()+
+        draw_plot(p1,x=0,y=0,width=0.33,height=1)+
+        draw_plot(p2,x=0.33,y=0,width=0.33,height=1)+
+        draw_plot(p3,0.66,0,0.33,1)+
+        draw_plot_label("PWS", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch4.8.15.20.group_overlap.png"), plot = venn,base_width = 10, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch4.8.15.20.group_overlap.png)
+
+
+### Pairwise comparison
+
+#### chr4 vs. chr8
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#x<-list(chr4=c4g3, chr8=c8g3,chr15=c15g3, chr20=c20g3)
+#x2<-list(chr4=c4g2, chr8=c8g2,chr15=c15g2, chr20=c20g2)
+x.1<-list(chr4=c4g3, chr8=c8g3)
+p3<-ggvenn(x.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+
+x2.2<-list(cchr4=c4g2, chr8=c8g2)
+p2<-ggvenn(x2.2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+x1.1<-list(chr4=c4g1, chr8=c8g1)
+p1<-ggvenn(x1.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+
+venn<-ggdraw()+
+        draw_plot(p1,x=0,y=0,width=0.33,height=1)+
+        draw_plot(p2,x=0.33,y=0,width=0.33,height=1)+
+        draw_plot(p3,0.66,0,0.33,1)+
+        draw_plot_label("PWS chr4 vs. chr8", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch4.8.group_overlap.png"), plot = venn,base_width = 7, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch4.8.group_overlap.png)
+
+
+
+#### chr4 vs. chr15
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#x<-list(chr4=c4g3, chr8=c8g3,chr15=c15g3, chr20=c20g3)
+#x2<-list(chr4=c4g2, chr8=c8g2,chr15=c15g2, chr20=c20g2)
+x.1<-list(chr4=c4g3, chr15=c15g3)
+p3<-ggvenn(x.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+x2.2<-list(chr4=c4g2, chr15=c15g2)
+p2<-ggvenn(x2.2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+x1.1<-list(chr4=c4g1, chr15=c15g1)
+p1<-ggvenn(x1.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+
+venn<-ggdraw()+
+        draw_plot(p1,x=0,y=0,width=0.33,height=1)+
+        draw_plot(p2,x=0.33,y=0,width=0.33,height=1)+
+        draw_plot(p3,0.66,0,0.33,1)+
+        draw_plot_label("PWS chr4 vs. chr15", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch4.15.group_overlap.png"), plot = venn,base_width = 7, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch4.15.group_overlap.png)
+
+#### chr4 vs. chr20(end-groups)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+x.1<-list(chr4=c4g3,chr20=c20g3)
+p3<-ggvenn(x.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+x2.2<-list(chr4=c4g2, chr20=c20g2)
+p2<-ggvenn(x2.2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+x1.1<-list(chr4=c4g1, chr20=c20g1)
+p1<-ggvenn(x1.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+
+venn<-ggdraw()+
+        draw_plot(p1,x=0,y=0,width=0.33,height=1)+
+        draw_plot(p2,x=0.33,y=0,width=0.33,height=1)+
+        draw_plot(p3,0.66,0,0.33,1)+
+        draw_plot_label("PWS chr4 vs. chr20(end)", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch4.20.group_overlap.png"), plot = venn,base_width = 7, base_height = 5, dpi=300)   
+```
+
+![](../Output/PCA/PWS_ch4.20.group_overlap.png)
+
+#### chr15 vs. chr20(end)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+x.1<-list(chr15=c15g3, chr20=c20g3)
+p3<-ggvenn(x.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+
+x2.2<-list(chr15=c15g2, chr20=c20g2)
+p2<-ggvenn(x2.2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+x1.1<-list(chr15=c15g1,chr20=c20g1)
+p1<-ggvenn(x1.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+
+venn<-ggdraw()+
+        draw_plot(p1,x=0,y=0,width=0.33,height=1)+
+        draw_plot(p2,x=0.33,y=0,width=0.33,height=1)+
+        draw_plot(p3,0.66,0,0.33,1)+
+        draw_plot_label("PWS chr15 vs. chr20", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch15.20.group_overlap.png"), plot = venn,base_width = 7, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch15.20.group_overlap.png)
+
+#### chr8 vs. chr20(end)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#x<-list(chr4=c4g3, chr8=c8g3,chr15=c15g3, chr20=c20g3)
+#x2<-list(chr4=c4g2, chr8=c8g2,chr15=c15g2, chr20=c20g2)
+x.1<-list(chr8=c8g3, chr20=c20g3)
+p3<-ggvenn(x.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+x2.2<-list(chr8=c8g2,chr20=c20g2)
+p2<-ggvenn(x2.2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+x1.1<-list(chr8=c8g1,chr20=c20g1)
+p1<-ggvenn(x1.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+
+venn<-ggdraw()+
+        draw_plot(p1,x=0,y=0,width=0.33,height=1)+
+        draw_plot(p2,x=0.33,y=0,width=0.33,height=1)+
+        draw_plot(p3,0.66,0,0.33,1)+
+        draw_plot_label("PWS chr8 vs. chr20(end)", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch8.20end.group_overlap.png"), plot = venn,base_width = 7, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch8.20end.group_overlap.png)
+
+
+### chr20 grouping with inversion clusters 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#ch15 adn ch8 groupings are the same for PWSonly and PWS+other pops
+c20c3<-pca20$Sample[pca20$Group=="Group3"]
+x<-list(chr4=c4g3, chr8=c8g3,chr15=c15g3, chr20=c20c3)
+p3<-ggvenn(x, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+
+c20c2<-pca20$Sample[pca20$Group=="Group2"]
+x2<-list(chr4=c4g2, chr8=c8g2,chr15=c15g2, chr20=c20c2)
+p2<-ggvenn(x2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+
+c20c1<-pca20$Sample[pca20$Group=="Group1"]
+x1<-list(chr4=c4g1, chr8=c8g1,chr15=c15g1, chr20=c20c1)
+p1<-ggvenn(x1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+
+venn<-ggdraw()+
+        draw_plot(p1,x=0,y=0,width=0.33,height=1)+
+        draw_plot(p2,x=0.33,y=0,width=0.33,height=1)+
+        draw_plot(p3,0.66,0,0.33,1)+
+        draw_plot_label("PWS Chr20 inversion cluster", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch4.8.15.group+20cluster_overlap.png"), plot = venn,base_width = 10, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch4.8.15.group+20cluster_overlap.png)
+
+#### chr4 vs. chr20_inv
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#x<-list(chr4=c4g3, chr8=c8g3,chr15=c15g3, chr20=c20g3)
+#x2<-list(chr4=c4g2, chr8=c8g2,chr15=c15g2, chr20=c20g2)
+x.1<-list(chr4=c4g3, chr20=c20c3)
+p3<-ggvenn(x.1, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+x2.2<-list(chr4=c4g2, chr20=c20c2)
+p2<-ggvenn(x2.2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+x1.2<-list(chr4=c4g1, chr20=c20c1)
+p1<-ggvenn(x1.2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+
+venn<-ggdraw()+
+       draw_plot(p1,x=0,y=0,width=0.33,height=1)+
+        draw_plot(p2,x=0.33,y=0,width=0.33,height=1)+
+        draw_plot(p3,0.66,0,0.33,1)+
+        draw_plot_label("PWS chr4 vs. chr20(inv)", x=-0.01, y=0.95, size = 15)
+save_plot(filename =paste0("../Output/PCA/PWS_ch4.20inv.group_overlap.png"), plot = venn,base_width = 7, base_height = 5, dpi=300)   
+```
+![](../Output/PCA/PWS_ch4.20inv.group_overlap.png)
+

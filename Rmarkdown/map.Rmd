@@ -1,0 +1,150 @@
+---
+title: "Pacific herring map"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    df_print: paged
+    number_sections: yes
+    theme: paper
+    toc: yes
+    toc_depth: 5
+    toc_float: yes
+  html_notebook:
+    toc: yes
+    toc_depth: 5
+editor_options: 
+  chunk_output_type: console
+---
+
+```{css, echo=FALSE}
+pre, code {white-space:pre !important; overflow-x:auto}
+```
+
+
+
+# Load R libraries
+```{r, message=FALSE, warning=FALSE, fig.width= 10, fig.height= 7,class.source = 'fold-show'}
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# BiocManager::install(version = "3.12")
+source("../Rscripts/BaseScripts.R")
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(tidyverse)
+library(reticulate)
+library(ggpubr)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggspatial)
+library(pophelper)
+library(rgeos)
+library(data.table)
+
+#BiocManager::install(c('magrittr', 'RcppArmadillo', 'rlang', 'tibble', 'vctrs', 'xfun'))
+#devtools::install_github('royfrancis/pophelper')
+#BiocManager::install("geiger")
+
+# color-blind friendly 
+# Wong, B. Points of view: Color blindness. Nat Methods (2011).
+bla <- "#000000"
+blu <- "#0072b2"
+grb <- "#56b4e9"
+lir <- "#cc79a7"
+gre <- "#009e73"
+red <- "#d55e00"
+org <- "#e69f00"
+yel <- "#f0e442"
+gry<-  '#BBBBBB'
+
+```
+
+
+# Plot population locations
+```{r, message=FALSE, warning=FALSE, fig.width= 10, fig.height= 7,class.source = 'fold-show'}
+theme_set(theme_bw())
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+sites <- data.frame(location= c("Cordova","Togiak Bay", "Sitka Sound", "Green Island", "Manchester WA",
+                                "Nunavachak","Gravina Point","San Francisco Bay","British Columbia","Rocky Bay"),
+                    population= c("PWS","Togiak","Sitka","PWS","WA","Togiak","PWS","CA","BC","PWS"),
+                    collection_years= c("2017","1991 + 1996 + 2017","1996 + 2006 + 2017","1991","2017",
+                                        "2006-07","2006-07","2017","2017","1996"),
+                    longitude = c(-145.767273,-160.421778,-135.603211,-147.532065,-122.529850,-160.046064,
+                                  -146.257331,-122.308856,-129.142209,-147.098320), 
+                    latitude = c(60.54014,58.941777,56.938869, 60.226742,47.554064,58.867054,
+                                 60.616651,37.692173,51.984516,60.348094),
+                    pop_longitude= c(-147, -160.42,-135.6, -147,-122.5,-160.42,-147,-122.4,-128.9,-147),
+                    pop_latitude=  c(60.54,58.8,56.93,60.54,47.6,58.8,60.54,37.69,52.1,60.54))
+simple_pops <- read.table("/Volumes/Kaho_Data/PacHerring/Data/familiarize/simple_pops_size.txt",header = TRUE, stringsAsFactors = FALSE, sep = "\t")
+
+
+# all populations
+ggplot(data = world) +
+  geom_sf() +
+  geom_point(data = sites, aes(x = longitude, y = latitude, fill = collection_years), size = 4, 
+             shape = 21) +
+  scale_fill_manual(name = "Collection Years",values=c(red,blu,gre,lir,org,grb))+
+  coord_sf(xlim = c(-165, -118), ylim = c(36, 65), expand = FALSE)+
+  xlab("") + ylab("")+
+  theme(legend.position = c(0.23, 0.31))
+  #scale_y_continuous(position='right')
+
+# grouped metapopulations
+
+sites$population<-factor(sites$population, levels=c("Togiak","PWS","Sitka","BC","WA","CA"))
+ggplot(data = world) +
+  geom_sf() +
+  geom_point(data = sites, aes(x = pop_longitude, y = pop_latitude, fill = population), size = 5, 
+             shape = 21) +
+  scale_fill_manual(name = "Collection Years",values=cols)+
+  coord_sf(xlim = c(-165, -118), ylim = c(36, 65), expand = FALSE)+
+  xlab("") + ylab("")+
+  theme(legend.position = "none")+
+  annotate(geom = "text", x = -160.45, y = 57.5, label = "TB", 
+           color = "grey22", size = 3.5)+
+  annotate(geom = "text", x = -146.5, y = 58.7, label = "PWS", 
+           color = "grey22", size = 3.5)+
+  annotate(geom = "text", x = -138, y = 56.5, label = "SS", 
+           color = "grey22", size = 3.5)+
+  annotate(geom = "text", x = -131, y = 50.8, label = "BC", 
+           color = "grey22", size = 3.5)+
+  annotate(geom = "text", x = -127, y = 47.6, label = "WA", 
+           color = "grey22", size = 3.5)+
+  annotate(geom = "text", x = -126.7, y = 37.69, label = "CA", 
+           color = "grey22", size = 3.5)+
+  annotation_scale(location = "tr", width_hint = 0.5) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+        pad_x = unit(0.75, "in"), pad_y = unit(0.5, "in"),
+        style = north_arrow_fancy_orienteering) 
+  #scale_y_continuous(position='right')
+ggsave("ph_map2.png", height = 4, width = 4,dpi = 300)
+
+ggplot(data = world) +
+  geom_sf() +
+  geom_point(data = sites, aes(x = pop_longitude, y = pop_latitude, fill = population), size = 5, 
+             shape = 21) +
+  scale_fill_manual(name = "Collection Years",values=cols)+
+  coord_sf(xlim = c(-165, -118), ylim = c(36, 65), expand = FALSE)+
+  xlab("") + ylab("")+
+  theme(legend.position = "none")+
+  annotate(geom = "text", x = -160.45, y = 57.5, label = "TB", 
+           color = "grey22", size = 4)+
+  annotate(geom = "text", x = -146.5, y = 58.7, label = "PWS", 
+           color = "grey22", size = 4)+
+  annotate(geom = "text", x = -138, y = 56.5, label = "SS", 
+           color = "grey22", size = 4)+
+  annotate(geom = "text", x = -131, y = 50.8, label = "BC", 
+           color = "grey22", size = 4)+
+  annotate(geom = "text", x = -127, y = 47.6, label = "WA", 
+           color = "grey22", size = 4)+
+  annotate(geom = "text", x = -126.7, y = 37.69, label = "CA", 
+           color = "grey22", size = 4)+
+  annotation_scale(location = "tr", width_hint = 0.5) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+        pad_x = unit(0.75, "in"), pad_y = unit(0.5, "in"),
+        style = north_arrow_fancy_orienteering) 
+```

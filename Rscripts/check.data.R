@@ -38,7 +38,7 @@ sample_info <- sample_info %>% separate(Pop, into = c("pop", "year"), sep = "(?<
 
 write.csv(sample_info,"Data/Sample_metadata_892pops.csv", row.names = F)
 
-
+sam$
 
 
 sam<-read.csv("Data/Sample_metadata_892pops.csv")
@@ -50,3 +50,178 @@ sink(NULL)
 fam<-read.table("Data/vcfs/ph_maf05_id.fam")
 fam$V2<-sam$newID
 write.table(fam,"Data/vcfs/ph_id_modified.fam",  quote=F, sep=" ", col.names = F, row.names = F)
+
+
+
+## Calculate the read count numbers for the samples used in the experiment 9.6.22
+
+pops<-read.csv("Data/Sample_metadata_892pops.csv")
+## Read picard metrics output files from Joe
+wgs<-data.frame()
+for (i in 1: nrow(pops)){
+    id<-pops$Sample[i]
+    df<-read.table(paste0("/Volumes/Kaho_Data/PacHerring/Data/familiarize/wgsMetrics/",id,".collect_wgs_metrics.txt"),header = TRUE, stringsAsFactors = FALSE, nrow= 1)
+    df$Sample<-id
+    wgs<-rbind(wgs, df)
+}
+
+popinfo<-pops[,c("Sample","Population.Year","pop","Year.Collected")]
+
+bam_summary<-merge(popinfo, wgs, by="Sample")
+
+byPopYr<-aggregate(bam_summary$MEAN_COVERAGE, by=list(bam_summary$Population.Year), mean)
+write.csv(byPopYr, "Output/QC/Bam_metrics_summary.csv")
+
+bam_summary$Population.Year<-factor(bam_summary$Population.Year, levels=c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17", "BC17","WA17","CA17"))
+write.csv(bam_summary, "Output/QC/Read_coverage_bam_file_summary.csv")
+
+library(ggplot2)
+source("Rscripts/BaseScripts.R")
+
+bam_summary<-read.csv("Output/QC/Read_coverage_bam_file_summary.csv", row.names = 1)
+byPopYr<-read.csv("Output/QC/Bam_metrics_summary.csv", row.names = 1)
+
+bam_summary$pop<-factor(bam_summary$pop, levels=c("TB","PWS","SS", "BC","WA","CA"))
+byPopYr$Group.1<-factor(byPopYr$Group.1,  levels=c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+
+bam_summary$Population.Year<-factor(bam_summary$Population.Year, levels=c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+
+ggplot()+
+    geom_boxplot(data=bam_summary, aes(x=Population.Year, y=MEAN_COVERAGE, color=pop))+
+    theme_classic()+ylab("Read coverage")+xlab('')+
+    theme(axis.text.x = element_text(angle=45, hjust=1))+
+    geom_point(data=byPopYr, aes(x=Group.1, y=x))+
+    scale_color_manual(values=cols, guide="none")+
+    annotate(geom="text", x = 12, y=2.45,label="Mean coverage = 1.061")
+ggsave("Output/QC/Mean_coverage_plot_per_pop.year.png", width = 6, height = 4, dpi=300)
+mean(bam_summary$MEAN_COVERAGE)
+#1.060702 the dataset-wide coverage
+
+byPopYr
+#   Group.1         x
+#1     BC17 1.1433385
+#2     CA17 1.3067545
+#3    PWS07 1.2245732
+#4    PWS17 0.9596604
+#5    PWS91 1.0283849
+#6    PWS96 1.0858443
+#7     SS06 0.9830740
+#8     SS17 1.0059452
+#9     SS96 1.1034367
+#10    TB06 1.1069350
+#11    TB17 0.9412129
+#12    TB91 1.1359431
+#13    TB96 0.9357896
+#14    WA17 0.9048108
+
+mean(bam_summary$SD_COVERAGE)
+
+### look at the correlation between read coverage and pi
+
+pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+year<-c(1991,1996,2006,2017,1991,1996,2007,2017,1996,2006,2017,2017,2017,2017)
+meanPi<-data.frame(pop.yr=pops, year=year)
+for (i in 1:length(pops)){
+    df<-read.csv(paste0("Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
+    meanPi$mean[i]<-mean(df$pi, na.rm=T)
+    meanPi$pop[i]<-gsub("\\d.+","",pops[i])
+}
+
+colnames(byPopYr)<-c("pop.yr","depth")
+data<-merge(byPopYr, meanPi, by="pop.yr")
+
+cor.test(data$depth, data$mean, method = "spearman")
+#Spearman's rank correlation rho
+#
+#data:  data$depth and data$mean
+#S = 114, p-value = 0.002992
+#alternative hypothesis: true rho is not equal to 0
+#sample estimates:
+#      rho 
+#0.7494505 
+
+ho<-read.csv("Output/Stats_window/Heterozygosity_pop_summary.csv", row.names = 1)
+data<-merge(data, ho[,c("pop","Ho_mean")], by.x = "pop.yr", by.y = "pop")
+
+#cor.test(data$depth, data$Ho_mean, method = "spearman")
+#data:  data$depth and data$Ho_mean
+#S = 36, p-value < 2.2e-16
+#alternative hypothesis: true rho is not equal to 0
+#sample estimates:
+#    rho 
+#0.9208791 
+data$pop<-factor(data$pop, levels=c("TB","PWS","SS", "BC","WA","CA"))
+ggplot(data, aes(x=depth, y=mean, color=pop))+
+    geom_point(size=3)+
+    xlab("Mean read depth")+
+    ylab(expression(paste("Mean ", pi)))+
+    theme_bw()+
+    annotate('text', x=1.28, y=0.00325, label="rho = 0.75**", size=3)+
+    scale_color_manual(values=cols)+ theme(legend.title = element_blank())
+ggsave("Output/QC/Cor_plot_depth.vs.Pi.png", width = 5.2, height = 4, dpi=300)
+
+ggplot(data, aes(x=depth, y=Ho_mean,color=pop))+
+    geom_point(size=3)+
+    xlab("Mean read depth")+
+    ylab("Mean Ho")+
+    theme_bw()+  scale_color_manual(values=cols)+
+    annotate('text', x=1.28, y=0.0041, label="rho = 0.92***", size=3)+
+    theme(legend.title = element_blank())
+ggsave("Output/QC/Cor_plot_depth.vs.Ho.png", width = 5.2, height = 4, dpi=300)
+### mean number of reads per sample (using samtools to get the number of mapped readds)
+
+
+reads<-popinfo
+for (i in 1: nrow(pops)){
+    id<-pops$Sample[i]
+    df<-read.table(paste0("Data/QC/",id,".stats.txt"),header = F, fill =T )
+    reads$Mapped_read_count[i]<-df[1,1]
+    
+}
+
+### Check if there were any sequencing biases reflected in higher Fst observed between 1991 and 2006/07 samples
+
+t1<-data.frame(table(pops$Sequence.Plate[pops$Year.Collected=="1991"]))
+# 6  7  9 10 11 13 14 15 17 18 19 
+# 3  8 15  7 22 16 16  8  8  5 24 
+colnames(t1)<-c("Plate","1991")
+t2<-data.frame(table(pops$Sequence.Plate[pops$Population.Year=="TB06"|pops$Population.Year=="PWS07"]))
+# 6  7  8  9 11 12 14 15 17 18 20 
+#15 23  8  8  8  9  3  8  8  8 
+ 
+colnames(t2)<-c("Plate","2006")
+
+plates<-merge(t1, t2, by="Plate", all=T)
+plates[is.na(plates)]<-0
+rownames(plates)<-plates$Plate
+
+#chi square test
+chisq.test(plates[,2:3])
+#Pearson's Chi-squared test
+#
+#data:  plates[, 2:3]
+#X-squared = 94.549, df = 12, p-value = 6.461e-15
+
+table(pops$Sequence.Plate, pops$Year.Collected)
+
+## TB06 and PWS07 have the higher pi out of all years, Not SS
+
+table(pops$Sequence.Plate, pops$Population.Year)
+#    BC17 CA17 PWS07 PWS17 PWS91 PWS96 SS06 SS17 SS96 TB06 TB17 TB91 TB96 WA17
+#6    24    0    15     8     0     0    0    0    0    0    0    3    0    8
+#7     8    0    15     0     0     0    8    0    8    8    8    8    0    0
+#8     8    0     0     8     0     8   15    8    8    8    0    0    0    0
+#9     8    8     8     0     7     0    0    8    0    0    0    8   16    0
+#10    0    0     0     8     7     8    0    8    8    0    8    0    8    8
+#11    0    8     0     8    15     0    0    0    0    8    0    7    0   16
+#12    8    0     0     0     0     8    0    8    8    9    0    0    8    8
+#13    0   14     0     0    16     0    0    8   15    0    0    0    0    8
+#14    0    8     0     0     0     0    0    0   16    3    0   16    8    8
+#15    0    8     0     8     0     8    8   16    0    8    0    8    0    0
+#16    0    8     0     8     0    24    0    0    8    0    0    0   14    0
+#17    0    0     0     8     0     8    8    0    0    8   16    8    3    0
+#18    8    0     8     0     5     8    0    0    7    0   24    0    0    0
+#19    0    0     0     0     8     0    0    8    0    0   16   16    8    8
+#20    0   16     0     0     0     0    2    0    0    0    0    0    8    8
+
+# No consistent plate contributing high pi (PWS07, CA17 PWS96 are the three highest pi)

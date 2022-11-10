@@ -67,23 +67,41 @@ write.csv(vcf_sample_info,"Data/Sample_metadata_892pops.csv", row.names = F)
 ###########
 # Plot for various Ks
 # list output files
-ofiles<-list.files("Output/ngsadmix/",pattern="output.corres")
+ofiles<-list.files("Data/ngsadmix/",pattern="output.corres")
 
+pop<-read.csv("Data/Sample_metadata_892pops.csv")
+
+pop$Population.Year<-factor(pop$Population.Year, levels=c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
+
+poporder<-paste(pop$Population.Year[order(pop$Population.Year)])
+pop_order<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
 for (i in 1:length(ofiles)){
     # extract K from the file name
     oname<-ofiles[i]
     k<-as.integer(substr(oname, 16,17))
     
     #read the qopt file for k=k
-    q<-read.table(paste0("Data/ngsadmix/qfiles/ph_filtered_snps_minDP600_maxDP2000_minQ20_minMQ30_NS0.5_maf0.05_k",k,".qopt"))
+    q<-read.table(paste0("Data/ngsadmix/PH_maf05_k",k,".qopt"))
     
     #order according to population and plot the NGSadmix results
-    ord<-orderInds(pop = as.vector(pop$Population.Year), q = q)
+    q$id<-pop$Population.Year
+    q<-q[order(q$id),]
     
-    pdf(paste0("Output/ngsadmix/Admix_plot_k",k,".pdf"), height = 7, width=15)
-    barplot(t(q)[,ord],col=2:21,space=0,border=NA,xlab="Populations",ylab=paste0("Admixture proportions for K=",k))
-    text(tapply(1:nrow(pop),pop[ord,"Population.Year"],mean),-0.05,unique(pop[ord,"Population.Year"]),xpd=T, srt=90, adj=1,cex=0.8)
-    abline(v=cumsum(sapply(unique(pop[ord,"Population.Year"]),function(x){sum(pop[ord,"Population.Year"]==x)})),col=1,lwd=1.2)
+    
+    ord<-orderInds(pop = as.vector(poporder), q = q[,1:(i+1)])
+    
+    xlabels<-data.frame(x=tapply(1:length(poporder),list(poporder), mean))
+    xlabels$pop<-factor(rownames(xlabels), levels=pop_order)
+    xlabels<-xlabels[order(xlabels$pop),]
+    
+    
+    barplot(t(q[,1:3]),col=c(4,2,7),space=0,border=NA,xaxt="n",xlab="Population",ylab=paste0("Admixture proportions for K=",k))
+    
+    
+    pdf(paste0("Output/ngsadmix/Admix_plot_k",k,"_small.pdf"), height = 3.5, width=8)
+    barplot(t(q[,1:3])[,ord],col=c(4,2,7),space=0,border=NA,xaxt="n",xlab="Population",ylab=paste0("Admixture proportions for K=",k))
+    text(xlabels$x,-0.05,xlabels$pop,xpd=T, srt=90, adj=1,cex=0.8)
+    abline(v=cumsum(sapply(unique(poporder[ord]),function(x){sum(pop[ord,"Population.Year"]==x)})),col=1,lwd=1.2)
     dev.off()
     
     #Plot the correlation matrix from evalAdmix

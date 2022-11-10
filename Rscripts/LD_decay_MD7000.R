@@ -1,31 +1,83 @@
 #LD Decay Analysis
-library(ggplot2)
-library(tidyverse)
-library(reticulate)
-library(reshape2)
-library(plyranges)
-library(seqinr)
-library(data.table)
-
-
-# color-blind friendly 
-# Wong, B. Points of view: Color blindness. Nat Methods (2011).
-bla <- "#000000"
-blu <- "#0072b2"
-grb <- "#56b4e9"
-lir <- "#cc79a7"
-gre <- "#009e73"
-red <- "#d55e00"
-org <- "#e69f00"
-yel <- "#f0e442"
-gry<-  '#BBBBBB'
-
-
+source("Rscripts/BaseScripts.R")
 
 ## LD Decay 
+#Window size comparison (plink setting)
+ld1<- read.table("Data/ngsLD/PWS07_maf05_r2.ld", header = TRUE, stringsAsFactors = FALSE)
+#ld2<-read.table("Data/ngsLD/PWS07_0threshold.ld", header = TRUE, stringsAsFactors = FALSE)
+ld3<-read.table("Data/ngsLD/PWS07_0.05.ld", header = TRUE, stringsAsFactors = FALSE)
 
-#No big differences in LD decay between populations. Drops to background levels between 200bp 
-#(Atlantic Herring LD drops off around 100bp).
+ld07<-read.table("Data/plink/LD/PWS07_maf05_r2.ld", header = TRUE, stringsAsFactors = FALSE)
+
+
+
+ld1$distance <- ld1$BP_B-ld1$BP_A
+#ld2$distance <- ld2$BP_B-ld1$BP_A
+ld3$distance <- ld3$BP_B-ld3$BP_A
+ld07$distance<- ld07$BP_B-ld07$BP_A
+
+plot(ld1$distance, ld1$R2, col = "white", xlim = c(0,1000), xlab = "distance (bp)" ,ylab = "R2")
+smooth_ld1 <-smooth.spline(ld1$distance, ld1$R2, spar = .15)
+lines(smooth_ld1, lwd = 2,lty = 2, col = red)
+smooth_ld3 <-smooth.spline(ld3$distance, ld3$R2, spar = .15)
+lines(smooth_ld3, lwd = 2,lty = 3, col = blu)
+smooth_ld07 <-smooth.spline(ld07$distance, ld07$R2, spar = .15)
+lines(smooth_ld07, lwd = 2,lty = 3, col = gre)
+
+
+plot(ld2$distance, ld2$R2, col = blu, xlim = c(0,1000), xlab = "distance (bp)" ,pch=16,ylab = "R2", cex=.5)
+plot(ld1$distance, ld1$R2, col = blu, xlim = c(0,10000), xlab = "distance (bp)" ,pch=16,ylab = "R2", cex=.5)
+plot(ld3$distance, ld3$R2, col = blu, xlim = c(0,1000), xlab = "distance (bp)" ,pch=16, ylab = "R2", cex=.5)
+
+hist(ld3$distance)
+hist(ld1$distance)
+
+plot(ld07$distance, ld07$R2, col = blu, xlim = c(0,10000), xlab = "distance (bp)" ,pch=16, ylab = "R2", cex=.2)
+
+
+
+ggplot()+
+    geom_smooth(data=ld1[ld1$distance<=1000,], aes(x=distance, y=R2), method = "loess", se = FALSE, span = 1/10, color = blu)+
+    geom_smooth(data=ld3[ld3$distance<=1000,], aes(x=distance, y=R2), method = "loess", se = FALSE, span = 1/10, color = red)+
+        theme_minimal()+
+        ylim(0,1)
+ggsave("Output/LD/LD_decay_curve_PWS07_differenttheresholds.pdf", width = 7, height = 5)
+
+
+ggplot()+
+    geom_smooth(data=ld07[ld07$distance<=1000,], aes(x=distance, y=R2), method = "loess", se = FALSE, span = 1/10, color = blu)+
+     theme_minimal()+
+    ylim(0,1)
+ggsave("Output/LD/LD_decay_curve_PWS07_0.1threshold.pdf", width = 7, height = 5)
+
+
+
+ggplot(fst, aes(x = midPos, y = Fst01)) + 
+    geom_point(size = 1, color = gry,alpha = 0.4, shape = 1)+
+    theme_minimal()+
+    theme(axis.text.x=element_blank())+
+    ylab("Fst\n")+ xlab("")+ 
+    ggtitle(paste(pops[1],"vs. ", pops[2]))+
+    geom_smooth(method = "loess", se = FALSE, span = 1/10, color = blu)+
+    facet_wrap(~chr, ncol = 9)
+    
+ld1$id<-1:nrow(ld1)
+df<-ld1[ld1$CHR_A==1,]
+plot(df$id, df$R2, pch=".")
+
+cols <- rev(rainbow(7)[-7]) #rainbow colors for heatmap
+
+ggplot(df, aes(x=BP_A, y=BP_B, color=R2))+
+    geom_point(size=0.3)+
+    scale_color_gradientn(colors=cols)+
+    theme_minimal()
+#plot along chr1
+ggplot(df, aes(x=BP_A, y=R2, color=R2))+
+    geom_point(size=0.3)+
+    scale_color_gradientn(colors=cols)+
+    theme_minimal()
+
+
 
 pop_names = c("PWS91","PWS96","PWS07","PWS17")
 pop_line <- c(4,3,2,1)

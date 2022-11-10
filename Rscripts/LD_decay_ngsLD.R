@@ -32,9 +32,6 @@ pop_line <- c(4,3,2,1)
 pop <- "PWS91"
 i <- 1
 ld <- read.table(paste0("Data/plink/pops/population_",pop_names[i],"_ph_filtered_snps_minDP600_maxDP2000_minQ20_minMQ30_NS0.5_maf0.05_indep_pairwise_100_10_0.8.ld"), header = TRUE, stringsAsFactors = FALSE)
-ld <- read.table("Data/ngsLD/PWS07_maf05_r2.ld", header = TRUE, stringsAsFactors = FALSE)
-
-
 ld$distance <- ld$BP_B-ld$BP_A
 
 plot(ld$distance, ld$R2, col = "white", xlim = c(0,1000), xlab = "distance (bp)" ,ylab = "R2")
@@ -76,8 +73,7 @@ plot(df$distance, df$R2,col="gray60", pch=".", xlim = c(0,200), xlab = "distance
 dev.off()
 
 ### 
-#Plot SFS
-
+Plot SFS
 #for (pop_name in pop_names){
 sfs1 <- read.table("Output/fst_pbs/folded_PWS07_TB91.sfs", header = FALSE, stringsAsFactors = FALSE)
 sfs1 <- data.frame(t(sfs1))
@@ -90,28 +86,50 @@ sfs2<-as.vector(sfs2[,1])
 barplot(sfs2[-1])
 
 
-### LD from ngsLD
-#BC17 chr 1
-ldbc <- read.table(paste0("Data/ngsLD/sub_ch1_BC17.ld"), header=F, sep="\t")
+### SUbset the PL files
+samples<-read.table("Data/ngsLD/samplesnames.txt")
+pw07<-grep("PWS07",samples[1,]) #406-543
+pw17<-grep("PWS17",samples[1,]) #544-711
+pw91<-grep("PWS91",samples[1,])  # 712-885
+pw96<-grep("PWS96",samples[1,]) #886-1101
 
-plot(ldbc$V3, ldbc$V4, col = "white", xlab = "distance (bp)" ,ylab = "R2", xlim=c(0,1000))
-smooth_ld <-smooth.spline(ldbc$V3, ldbc$V4, spar = .15)
-lines(smooth_ld, lwd = 2,lty = pop_line[i], col = blu)
+## how to prep the file for ngsLD ###
+#1. extract the columns corresponding to the population.year
+cut -d "," -f406-543 /home/ktist/ph/data/new_vcf/MD7000/beagle/MD7000_maf05_c12.BEAGLE.PL > /home/ktist/ph/data/new_vcf/MD7000/beagle/PopYr/c12.PWS07
+#2. remove the header (sample names)
+sed -e '1d' < /home/ktist/ph/data/new_vcf/MD7000/beagle/PopYr/c12.PWS07 > /home/ktist/ph/data/new_vcf/MD7000/beagle/PopYr/c12.PWS07.noheader  
+#3. zip the file 
+bgzip /home/ktist/ph/data/new_vcf/MD7000/beagle/PopYr/c12.PWS07.noheader  
+#4. run ngsLD
+./programs/ngsLD/ngsLD --geno /home/ktist/ph/data/new_vcf/MD7000/beagle/PopYr/c12.PWS07.noheader.gz --max_kb_dist 1000 --n_ind 46 --n_sites 11759 --prob --pos /home/ktist/ph/data/new_vcf/MD7000/beagle/positions/pos_chr12.txt --n_threads 12 --out /home/ktist/ph/data/ngsLD/chr12.PWS07.ld 
 
-ldbc2<-ldbc[!(is.nan(ldbc$V6)|is.infinite(ldbc$V6)),]
-plot(ldbc2$V3, ldbc2$V6, col = "white", xlab = "distance (bp)" ,ylab = "D'")
-smooth_ld <-smooth.spline(ldbc2$V3, ldbc2$V6, spar = .15)
-lines(smooth_ld, lwd = 2,lty = pop_line[i], col = red)
 
-max(ld2$V7)
-plot(ldbc2$V3, ldbc2$V7, col = "white", xlab = "distance (bp)" ,ylab = "R2'",xlim = c(0,200000))
-smooth_ld <-smooth.spline(ldbc2$V3, ldbc2$V7, spar = .15)
-lines(smooth_ld, lwd = 2,lty = pop_line[i], col = red, xlim = c(0,200000))
+# Read the output file from ngsLD
 
-plot(ldbc2$V3, ldbc2$V7,col="gray60", pch=".", xlim = c(0,400000), xlab = "distance (bp)" ,ylab = "R2")
+ldpws<-read.table("Data/ngsLD/chr12.PWS07.ld", header = F, sep="\t" )
 
-## use LDheatmap
 
+plot(ldpws$V3, ldpws$V4, col = "white", xlim = c(0,1000), xlab = "distance (bp)" ,ylab = "R2")
+smooth_ld <-smooth.spline(ldpws$V3, ldpws$V4, spar = .15)
+lines(smooth_ld, lwd = 2,lty = 2, col = red)
+
+plot(ldpws$V3, ldpws$V4, col = "gray", xlim = c(0,1000), xlab = "distance (bp)" ,ylab = "R2", pch=".")
+
+ggplot()+
+    geom_point(data=ldpws[ldpws$V3<=1000,], aes(x=V3, y=V4),color = "gray", size=0.2)+
+    
+    geom_smooth(data=ldpws[ldpws$V3<=1000,], aes(x=V3, y=V4), method = "loess", se = FALSE, span = 1, color = blu)+
+     theme_minimal()+
+    ylim(0,1)+xlab("Distance (bp)")+ylab('LD')
+ggsave("Output/LD/ngsLD_decay_curve_ch12_PWS07.pdf", width = 7, height = 5)
+
+plot(ld1$R2, pch=".", col="gray")
+ld_sm<-ld1[ld1$distance<=1000,]
+
+plot(ld_sm$R2, pch=".", col="gray")
+
+
+#heatmap
 library(snpStats)
 library(LDheatmap)
 

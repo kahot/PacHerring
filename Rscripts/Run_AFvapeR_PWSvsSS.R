@@ -588,3 +588,35 @@ ggplot(pos2, aes(x=Pop, y=freq, fill=location))+
 #first 30 loci
 ggplot(af1[af1$POS %in%po1, ], aes(x=factor(POS), y=freq, fill=Pop))+
     geom_bar(stat="identity", position=position_dodge())
+
+
+
+
+
+#### SNPEFF results -extract gene id for GO analysis
+
+df<-read.table(paste0("Output/AFvapeR_output/Parallel_PWS96_SS96/annotation/PWS_SS96_annotation"), header = F)
+annotations<-data.frame()
+for (i in 1: nrow(df)){
+    anns<-unlist(strsplit(df$V4[i], "\\|"))
+    anns<-anns[c(2,3,4,5,8,17,18,19,20,23)]
+    annotations<-rbind(annotations, anns)
+}     
+
+colnames(annotations)<-c("Annotation","Putative_impact","Gene_name", "Gene_ID", "Transcript_biotype","Annotation2","Putative_impact2","Gene_name2", "Gene_ID2", "Transcript_biotype2")
+Ano<-cbind(df[,1:3], annotations)
+colnames(Ano)[1:3]<-c("chr","pos","AF")
+#remove the duplicated annotations for deeper digging
+remove<-!duplicated(annotations)
+Ano2<-Ano[remove,]
+write.csv(Ano2, paste0("Output/AFvapeR_output/Parallel_PWS96_SS96/annotation/PWS_SS96_outlier_genelist.csv"))
+
+geneids<-c(Ano2$Gene_ID, Ano2$Gene_ID2)
+geneids<-unique(geneids)
+geneids<-geneids[nchar(geneids)<=18]
+geneids<-unique(geneids)
+
+
+sink(paste0("Output/AFvapeR_output/Parallel_PWS96_SS96/annotation/PWS_SS96_outlier_geneid_list.txt"))
+cat(paste0(geneids,"; "))
+sink(NULL)

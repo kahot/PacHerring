@@ -420,7 +420,7 @@ print(p)
 ## Identify the regions with big/opposite allele freq changes over time
 pop <- "PWS"
 
-freqs_win <- read.table(paste("Data/freqs/window/PWS_shifts_50kb_win_10kb_step.txt, sep = ""))
+freqs_win <- read.table(paste("Data/freqs/window/PWS_shifts_50kb_win_10kb_step.txt"), sep = "")
 freqs_win$chr_num <- factor(freqs_win$chr, levels = c(1:26))
 colnames(freqs_win)[c(1:3)] <- c("seqnames","start","end")
 # identify windows where allele frequencies increased between each sampling period

@@ -247,9 +247,9 @@ ch6<-common_loci[grep("chr6",common_loci)]
 ch6
 
 
-#Look at if copy number variation exit near CYP1A like the killifish
+#Look at if copy number variation exist near CYP1A like the killifish
 vcf <- read.vcfR('Data/vcfs/ph_chr6.vcf.gz')
-
+vcf<-read.vcfR("Data/new_vfc/PH_MD7000_maf01_chr6.vcf.gz")
 #extract the read depth information 
 dp <- extract.gt(vcf, element = "DP", as.numeric=TRUE)
 
@@ -258,9 +258,11 @@ dp_pws<-dp[,grep("PWS",colnames(dp))]
 
 write.csv(dp_pws, "Output/AF/PWS_chr6_read_depth.csv")
 
+dp_ca<-dp[,grep("CA",colnames(dp))]
+
 #extract the position as numbers from rownames
 positions<-as.integer(gsub("chr6_", '', rownames(dp_pws)))
-n<-which(positions>=2500000&positions<=3500000)
+n<-which(positions>=2000000&positions<=3500000)
 
 #near CYP1A
 dp_pws2<-data.frame(dp_pws[n,])
@@ -279,12 +281,13 @@ samples<-unique(p91$variable) #individual IDs
 
 #plot each individual
 plots<-list()
-for (i in 31: length(samples)){
-    plots[[i-30]]<-ggplot(p91[p91$variable==samples[i],], aes(x=pos, y=value))+
-        geom_point(size=0.5)+ylim(0,20)+
+for (i in 1: length(samples)){
+    plots[[i]]<-ggplot(p91[p91$variable==samples[i],], aes(x=pos, y=value))+
+        geom_point(size=0.5)+ylim(0,max(p91$value, na.rm=T))+
         ggtitle(gsub("X","",samples[i]))
 }
-pdf("Output/AF/PWS_copyNo_nearCYP1A_2.pdf", width = 15, height = 22)
+#pdf("Output/AF/dp7000_PWS91_copyNo_nearCYP1A.pdf", width = 15, height = 40)
+pdf("Output/AF/chr6/dp7000_PWS91_ch6.20-35m.pdf", width = 15, height = 40)
 do.call(grid.arrange, c(plots, ncol=3))
 dev.off()
 
@@ -297,10 +300,10 @@ samples<-unique(p96$variable) #individual IDs
 plots<-list()
 for (i in 1: 30){
     plots[[i]]<-ggplot(p96[p96$variable==samples[i],], aes(x=pos, y=value))+
-        geom_point(size=0.5)+ylim(0,20)+
+        geom_point(size=0.5)+ylim(0,max(p96$value, na.rm=T))+
         ggtitle(gsub("X","",samples[i]))
 }
-pdf("Output/AF/PWS96_copyNo_nearCYP1A_1.pdf", width = 15, height = 26)
+pdf("Output/AF/dp7000_PWS96_copyNo_nearCYP1A.pdf", width = 15, height = 26)
 do.call(grid.arrange, c(plots, ncol=3))
 dev.off()
 
@@ -310,12 +313,12 @@ samples<-unique(p07$variable) #individual IDs
 
 #plot each individual
 plots<-list()
-for (i in 1: 30){
+for (i in 1: 20){
     plots[[i]]<-ggplot(p07[p07$variable==samples[i],], aes(x=pos, y=value))+
         geom_point(size=0.5)+ylim(0,20)+
         ggtitle(gsub("X","",samples[i]))
 }
-pdf("Output/AF/PWS07_copyNo_nearCYP1A_1.pdf", width = 15, height = 26)
+pdf("Output/AF/dp7000_PWS07_copyNo_nearCYP1A_1.pdf", width = 15, height = 15.5)
 do.call(grid.arrange, c(plots, ncol=3))
 dev.off()
 
@@ -332,9 +335,34 @@ for (i in 1: 30){
         geom_point(size=0.5)+ylim(0,20)+
         ggtitle(gsub("X","",samples[i]))
 }
-pdf("Output/AF/PWS17_copyNo_nearCYP1A_1.pdf", width = 15, height = 26)
+pdf("Output/AF/dp7000_PWS17_copyNo_nearCYP1A_1.pdf", width = 15, height = 26)
 do.call(grid.arrange, c(plots, ncol=3))
 dev.off()
+
+
+## CA pop
+#near CYP1A
+dp_ca2<-data.frame(dp_ca[n,])
+dp_ca2$pos<-positions[n]
+
+dp_cam<-melt(dp_ca2, id.vars="pos")
+
+#Change the sample ids as character
+dp_cam$variable<-as.character(dp_cam$variable)
+
+samples<-unique(dp_cam$variable) #individual IDs
+#plot each individual
+plots<-list()
+for (i in 1: 30){
+    plots[[i]]<-ggplot(dp_cam[dp_cam$variable==samples[i],], aes(x=pos, y=value))+
+        geom_point(size=0.5)+ylim(0,max(dp_cam$value, na.rm = T))+
+        ggtitle(gsub("X","",samples[i]))
+}
+pdf("Output/AF/dp7000_CA17_copyNo_nearCYP1A_2.pdf", width = 15, height = 26)
+do.call(grid.arrange, c(plots, ncol=3))
+dev.off()
+
+
 
 
 ##################

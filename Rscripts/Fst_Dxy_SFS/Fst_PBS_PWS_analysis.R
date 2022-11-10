@@ -85,30 +85,32 @@ ggplot(pbsm, aes(x=loc, y=value, color=color))+
 ggsave("Output/fst_pbs/PWS_pbs_3yrs_stacked.pdf", width = 10, height = 7)
 
 
-# top 1% outliers of PBSs
-pb.out<-pbsm[order(abs(pbsm$value), decreasing = T),]
-pb.out<-pb.out[1:2102,]
+# top 1% outliers of PBSs (Fst/PBS from ANGSD were based on windows)
+pb.out<-pbsm[order(abs(pbsm$value), decreasing = T),] #210222 windows
+pb.out<-pb.out[1:1913,]
 
 pb.out<-merge(pb.out, pbs[,c("loc","region","midPos")], by="loc", all.x=T)
 table(pb.out$variable)
 #PBS96 PBS07 PBS17 
-#302  1177   623 
+#268  1084   561  
 
 length(unique(pb.out$loc))
 #1913/2102
 
-p17<-pb.out2[pb.out2$variable=="PBS17",]
-p07<-pb.out2[pb.out2$variable=="PBS07",]
-p96<-pb.out2[pb.out2$variable=="PBS96",]
+p17<-pb.out[pb.out$variable=="PBS17",]
+p07<-pb.out[pb.out$variable=="PBS07",]
+p96<-pb.out[pb.out$variable=="PBS96",]
 
-table(pb.out$variable,pb.out$chr)
+sum<-data.frame(table(pb.out$variable,pb.out$chr))
 #       1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26
 #PBS96 15  0 15 14  4 20 20 12  7 14  8 28  5 15 15  9  4 18 15  7  8 11 26 11  1  0
 #PBS07 66 38 58 54 27 59 45 39 19 87 45 65 35 57 48 59 46 47 61 38 58 28 40 35 11 12
 #PBS17 23 28 31 25 26 32 21 19  9 34 28 38 24 33  5 42 32 20 37 27 15  8 40  8  8 10
 
+chr<-aggregate(sum$Freq, by=list(sum$Var2), sum)
+chr[order(chr$x),]
 
-#xtract the regions and find the annotations
+#etract the regions and find the annotations
 #create the bed file
 pops<-c("PWS96","PWS07","PWS17")
 files<-c("p96","p07","p17")
@@ -144,32 +146,6 @@ for (i in 1: length(pops)){
 
 
 
-p07_loc<-data.frame()
-n=1
-while (n <=nrow(p07)){
-    x<-p07$loc[n]
-    
-    if (p07$loc[n+1]!=(x+1)) {
-        newrow=c(p07$loc[n], p07$chr[n],p07$midPos[n]-25000, p07$midPos[n]+25000 )
-        p07_loc<-rbind(p07_loc, newrow)
-        n=n+1
-    }
-    if (p07$loc[n+1]==(x+1)){
-         k=0
-         while (!is.na(p07$loc[n+k]) & p07$loc[n+k]==(x+k)) k=k+1
-         newrow=c(p07$loc[n], p07$ch[n],p07$midPos[n]-25000, p07$midPos[n+k-1]+25000)
-        p07_loc<-rbind(p07_loc, newrow)
-        n=n+k
-    }
-}        
-p07_loc<-p07_loc[,-1]
-#convert the numbers to non-scientific
-p07_loc$X.40000.<-as.integer(p07_loc$X.40000.)
-p07_loc$X.90000.<-as.integer(p07_loc$X.90000.)
-write.table(p07_loc, "Output/fst_pbs/PWS/PWS07_OutlierPBS_loci.bed", quote=F, sep="\t",row.names=F, col.names = F)
-
-
-#PWS17
 
 # Create a new vcf file containing the loci in p07_loc.
  ## at terminal

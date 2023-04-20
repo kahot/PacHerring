@@ -18,7 +18,7 @@ library(tidyverse)
 library(PopGenome)
 ```
 
-# Analyze population adata with PopGenome package
+# Analyze population data with PopGenome package
 ```{r}
 #this will read all VCF files in the directory
 pws <- readData("../Data/new_vcf/PWS/", format = "VCF", include.unknown = TRUE, FAST = TRUE)

@@ -473,7 +473,7 @@ dat17<-merge(dat17, unlnk)
 
 ```
 
-### 2. Combine two populations and trim loci with freq > 0.1  
+### 2. Combine time points and trim loci with freq > 0.1  
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
 years<-c("91","96","07","17")
@@ -533,6 +533,61 @@ knitr::kable(estNe)
 
 
 ![](../Output/Ne/Jorde-Ryman_Ne.estimates.png){width=60%}
+
+### 2.2. Combine time points and trim loci with freq > 0.02   
+* Lowering the frequency threshold lowers the estimated Ne 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+years<-c("91","96","07","17")
+comb<-t(combn(years, 2))
+
+estNe<-data.frame(pop1=comb[,1], pop2=comb[,2])
+gens<-c(1,2.67,4.33,1.83,3.5,1.67)
+
+for (i in 1: nrow(comb)){
+    df1<-get(paste0("dat",comb[i,1]))
+    df2<-get(paste0("dat",comb[i,2]))
+    
+    setnames(df1, c("knownEM", 'nInd'), c("freq1", 'nInd1'))
+    setnames(df2, c("knownEM", 'nInd'), c("freq2", 'nInd2'))
+    
+    df <- df1[df2, .(chromo, position, freq1, freq2, nInd1, nInd2)][!is.na(freq1) & !is.na(freq2) & freq1 > 0.02 & freq2 > 0.02, ]
+    g=gens[i]
+    
+    estNe$Ne[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g)] 
+
+    # block bootstrapping across LGs
+    uq.ch <- df[, sort(unique(chromo))]
+
+    boot.re <- boot(uq.ch, jrNe2block, 1000, gen = g, alldata = df)
+    estNe$median[i]<-median(boot.re$t[is.finite(boot.re$t)]) # median bootstrap
+    estNe$mean[i]<-mean(boot.re$t[is.finite(boot.re$t)])
+    ci<-boot.ci(boot.re, type = c('perc'))
+    #95% C.I.
+    estNe$CI.low[i]<-ci$percent[4]
+    estNe$CI.up[i]<-ci$percent[5]
+    
+    #reset the attibutes
+    setnames(df1, c("freq1", 'nInd1'),c("knownEM", 'nInd'))
+    setnames(df2, c("freq2", 'nInd2'),c("knownEM", 'nInd'))
+}
+
+write.csv(estNe,"../Output/Ne/Jorde-Ryman_Ne.estimates_PWS_0.02threshold.csv")
+estNe<-read.csv("../Output/Ne/Jorde-Ryman_Ne.estimates_PWS_0.02threshold.csv", row.names = 1, )
+estNe$year<-apply(estNe["pop2"],1, function(x) {if (x=="96") x=1996
+                   else if (x=="07"|x=="7") x=2007
+                   else if (x=="17") x=2017})
+
+ggplot(estNe[c(1,4,6),], aes(x=year, y=Ne))+
+    geom_point(size=2, color="blue")+
+    geom_errorbar(aes(ymin = CI.low, ymax = CI.up), width = 0.2, color="blue")+
+    geom_path(color="blue")+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+ggtitle("PWS")
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates_0.02Threshold.png", width = 5, height = 3, dpi=300)
+```
+
+
+
 
 * TB pop  
 

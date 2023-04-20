@@ -11,13 +11,24 @@ output:
       code_folding: hide
       df_print: paged
 ---
-# Run NGSadmix Steps
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+source("../Rscripts/visFuns.R")
+library(tidyverse)
+library(tibble)
+library(cowplot)
+library(FSTruct)
+```
+
+
+# Steps for Running NGSadmix 
 
 ## Prune SNPs: Using Plink to prune highly linked snps  
 
 * Plink output file: PH_maf05_prune_50.5.0.5.prune.in
     - Need to reformat the plink output (xxx.prune.in) file to a bed format in order to subset a vcf file  
-```{bash eval=FALSE, echo=TRUE}
+```{bash eval=FALSE}
 #Reformat prun.in file with running the reformat_prunin.R
 R
 source("reformat_prunin.R")
@@ -25,7 +36,7 @@ reformat_prunin("ph/data/new_vcf/MD7000/pruned/PH_maf05_prune_50.5.0.5.prune.in"
 #output ph/data/new_vcf/MD7000/pruned/PH_maf05_prune_50.5.0.5.prune.in.sites.txt
 quit()
 
-## Use bcftools to subset the VCF file with .prune.in.sutes.txt
+## Use bcftools to subset the VCF file with .prune.in.sites.txt
 bcftools view -R /home/ktist/ph/data/new_vcf/MD7000/pruned/PH_maf05_prune_50.5.0.5.prune.in.sites.txt  /home/ktist/ph/data/new_vcf/MD7000/PH_DP600_7000_minQ20_minMQ30_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/pruned/PH_DP600_7000_NS0.5_maf05_pruned.vcf
 bgzip /home/ktist/ph/data/new_vcf/MD7000/pruned/PH_DP600_7000_NS0.5_maf05_pruned.vcf
 
@@ -43,36 +54,26 @@ bgzip /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_maf05_pruned_BEAGLE.PL
 
 ```
 
-## Run NGSadmix  
+## Run NGSadmix at Farm 
 
-```{bash}
+```{bash eval=FALSE}
 # run k=2-5 (run_NGSadmix.sh)
 for i in {2..5} 
 do 
 NGSadmix -likes /home/ktist/ph/data/new_vcf/MD7000/beagle/PH_maf05_pruned.BEAGLE.PL.gz -K $i -o /home/ktist/ph/data/NGSadmix/Ph_pruned_maf05_k$i -P 8 
 done 
-
 ```
 
 
 ## Run evalAdmix (locally)
-```{bash}
+```{bash eval=FALSE}
 #evalAdmix_runlocal.sh
-
 evalAdmix -beagle Data/ngsadmix/PH_maf05_pruned_BEAGLE.PL.gz -fname Data/ngsadmix/PH_pruned_maf05_k2.fopt.gz -qname Data/ngsadmix/PH_pruned_maf05_k2.qopt -P 8 -o output.corres.k2.txt
 
 ```
 
-
 # Results from NGSadmix
-
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
-source("../Rscripts/BaseScripts.R")
-source("../Rscripts/visFuns.R")
-
-library(tidyverse)
-library(tibble)
-
 #Output files
 qfiles<-list.files("../Data/ngsadmix/",pattern=".qopt")
 
@@ -130,8 +131,6 @@ for (i in 1:length(qfiles)){
     plotCorRes(cor_mat = r, pop = as.vector(pop[,"Population.Year"]), ord = ord, title=paste0("Evaluation of admixture proportions with K=",k), max_z=0.1, min_z=-0.1)
     dev.off()}
 }
-
-
 ```
 
 ![](../Output/ngsadmix/Admix_plot_k2_small.png)
@@ -199,13 +198,937 @@ write.table(logs, "../Output/ngsadmix/logs.txt", sep="\t", row.names = F, col.na
 # Then it usually makes sense to focus on values of K that capture most of the structure in the data and that seem 
 # biologically sensible.'
 
-
 # plot admix values
+```
+
+* Resuls from CLUMPAK   
+**"Optimal K by Evanno is: 3 "**
+<br>
+<br>
+
+# Run Population specific NGSadmix & FSTruct
+## PWS
+- Create bash scritpts to to prep the files  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#Create beagle files (create_beagle.sh)
+#pops<-c("PWS91","PWS96","PWS07","PWS17")
+sink(paste0("../Data/Slurmscripts/beagle_pws.sh"))
+cat("#!/bin/bash -l\n\n")
+cat(paste0("#SBATCH --job-name=beagle \n"))
+cat(paste0("#SBATCH --mem=16G \n")) 
+cat(paste0("#SBATCH --ntasks=8 \n"))
+cat(paste0("#SBATCH -e beagle.err  \n"))
+cat(paste0("#SBATCH --time=72:00:00  \n"))
+cat(paste0("#SBATCH -p high  \n"))
+cat("\n")
+for (i in 1:26){
+   cat(paste0("vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/pruned/pruned_PWSonly_maf05_50.5.5.vcf.gz --chr chr1 --out /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_c",i," --BEAGLE-PL \n"))
+}
+
+for (i in 2:26){
+    cat(paste0("sed -e '1, 1d' < /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_c",i,".BEAGLE.PL > /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_c",i,".2.BEAGLE.PL \n"))
+}
+cat("\n")
+
+cat("cat /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_c1.BEAGLE.PL ") 
+for (i in 2:26){
+    cat(paste0("/home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_c",i,".2.BEAGLE.PL "))
+}
+cat(paste0(" > /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_BEAGLE.PL \n"))
+cat("gzip /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_BEAGLE.PL \n\n")
+
+sink(NULL)
+ 
+```
+
+
+### Run NGSadmix at Farm 
+```{r eval=FALSE}
+#create slurm scripts to run NGSadmix
+# run k=2-5 (run_NGSadmix.sh)
+#first run once:
+for (i in 2:6) {
+    sink(paste0("../Data/Slurmscripts/RunNGSadmix.",i,".sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=admix.",i,"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error admix.",i,".err\n"))
+    cat("#SBATCH --time=48:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    
+    cat(paste0("NGSadmix -likes /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_BEAGLE.PL.gz -K ",i," -o /home/ktist/ph/data/NGSadmix/PWSonly_pruned_maf05_k",i," \n"))
+    sink(NULL)
+}
+
+# Run 10 times for each K to feed into Clumpak
+
+```
+
+
+### Run evalAdmix (locally)
+```{r eval=FALSE}
+sink(paste0("../Data/Slurmscripts/evalAdmix_runlocal_pws.sh"))
+cat("#!/bin/bash \n\n")
+
+#evalAdmix_runlocal_pws.sh
+for (i in 2:6){
+    cat(paste0("evalAdmix -beagle Data/ngsadmix/PWSonly_pruned_maf05_BEAGLE.PL.gz -fname Data/ngsadmix/PWSonly_pruned_maf05_k",i,".fopt.gz -qname Data/ngsadmix/PWSonly_pruned_maf05_k",i,".qopt -P 8 -o output.corres.k",i,".txt \n"))
+}
+sink(NULL)
+```
+
+### NGSadmix and EvalAdmix outputs for PWS  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Output files
+qfiles<-list.files("../Data/ngsadmix/",pattern="^PWSonly.+.qopt")
+ofiles<-list.files("../Data/ngsadmix/",pattern="^PWSonly.+output.corres")
+
+#population info
+pop<-read.csv("../Data/Sample_metadata_892pops.csv")
+ppop<-pop[grepl("PWS",pop$Sample),]
+ppop$Population.Year<-factor(ppop$Population.Year, levels=c("PWS91","PWS96","PWS07","PWS17"))
+poporder<-paste(ppop$Population.Year[order(ppop$Population.Year)])
+pop_order<-c("PWS91","PWS96","PWS07","PWS17")
+
+for (i in 1:length(qfiles)){
+    # extract K from the file name
+    oname<-ofiles[i]
+    k<-as.integer(str_extract(oname, "[[:digit:]]+"))
+    
+    #read the qopt file for k=k
+    q<-read.table(paste0("../Data/ngsadmix/", qfiles[i]))
+    
+    #order according to population and plot the NGSadmix results
+    q$id<-ppop$Population.Year
+    q<-q[order(q$id),]
+    
+    ord<-orderInds(pop = as.vector(poporder), q = q[,1:(i+1)])
+    
+    xlabels<-data.frame(x=tapply(1:length(poporder),list(poporder), mean))
+    xlabels$pop<-factor(rownames(xlabels), levels=pop_order)
+    xlabels<-xlabels[order(xlabels$pop),]
+    
+    # c('PWS color', 'TB color', 'CA color" )
+    #if (i==1|i==2) colors=c(4,2,7)
+    if (i==1|i==2) colors=c(2,4,7)
+    #colors<-c("#cc79a7","#56b4e9", "#e69f00")
+    #if (i==3) colors=c(5,4,7,2,3) 
+    if (i==3) colors=c(5,2,7,4,3) 
+    if (i==4) colors=c(4,2,5,7,3)
+
+    {png(paste0("../Output/ngsadmix/PWSonly_Admix_plot_k",k,".png"), height = 3.5, width=8, unit="in", res=300)
+    barplot(t(q[,1:(i+2)])[,ord],col=colors,space=0,border=NA,xaxt="n",xlab="Population",ylab=paste0("Admixture proportions for K=",k))
+    text(xlabels$x,-0.05,xlabels$pop,xpd=T, srt=90, adj=1,cex=0.8)
+    abline(v=cumsum(sapply(unique(poporder[ord]),function(x){sum(ppop[ord,"Population.Year"]==x)})),col=1,lwd=1.2)
+    dev.off()}
+    
+    #Plot the correlation matrix from evalAdmix
+    r<-read.table(paste0("../Data/ngsadmix/",ofiles[i]))
+    
+    # Plot correlation of residuals
+    {pdf(paste0("../Output/ngsadmix/PWSonly_evalAdmix_corplot_k",k,".pdf"), height = 8, width=10)
+    plotCorRes(cor_mat = r, pop = as.vector(ppop[,"Population.Year"]), ord = ord, title=paste0("Evaluation of admixture proportions with K=",k), max_z=0.1, min_z=-0.1)
+    dev.off()}
+}
+
+```
+![](../Output/ngsadmix/PWSonly_Admix_plot_k2.png)
+![](../Output/ngsadmix/PWSonly_Admix_plot_k3.png)
+![](../Output/ngsadmix/PWSonly_Admix_plot_k4.png)  
+
+![](../Output/ngsadmix/PWSonly_Admix_plot_k5.png)  
+
+
+### Best K estimate
+* Run each k for 10 times to assess the best k  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#create slurm scripts to run NGSadmix x 10
+for (i in 2:6) {
+    sink(paste0("../Data/Slurmscripts/NGSadmixP.",i,".sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=admix.",i,"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error admix.",i,".err\n"))
+    cat("#SBATCH --time=300:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    
+    for (j in 1:10){
+        cat(paste0("NGSadmix -likes /home/ktist/ph/data/new_vcf/MD7000/beagle/PWSonly_pruned_maf05_BEAGLE.PL.gz -K ",i," -o /home/ktist/ph/data/NGSadmix/PWSonly_pruned_maf05_k",i,"_run",j," \n"))
+    }
+    sink(NULL)
+}
+```
+
+
+* Compile all likelihood numbers from log files into 1 (logfile)  
+```{bash eval=FALSE}
+#linux code (won't work for unix)
+(for log in `ls *.log`; do grep -oP 'PWSonly_pruned_maf05_\K[^ ]+|like=\K[^ ]+' $log; done) > logfile_k3
+```
+
+* Slurmscripts to create log files
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+sink(paste0("../Data/Slurmscripts/logfilesP.sh"))
+cat("#!/bin/bash -l\n\n")
+cat(paste0("#SBATCH --job-name=logP \n"))
+cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+cat(paste0("#SBATCH --error logP.err\n"))
+cat("#SBATCH --time=24:00:00
+#SBATCH -p high \n")
+cat("\n")
+for (k in 2:6){
+    cat(paste0("cd /home/ktist/ph/data/NGSadmix/PWS_k",k,"/ \n"))
+    cat("(for log in `ls *.log`; do grep -oP 'like=\\K[^ ]+' $log; done) > pws_logfile_k")
+    cat(paste0(k ," \n"))
+}
+sink(NULL)
+```
+
+* Read 'logfile' & create an input file for Clumpak
+    * http://clumpak.tau.ac.il/bestK.html  
+    * Upload the log probability table file to the website and submit the form
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#log2<-read.table("../Data/ngsadmix/PWS/pws_log_k2", sep="\t", header =FALSE)
+#log3<-read.table("../Data/ngsadmix/PWS/pws_log_k3", sep="\t", header =FALSE)
+#log4<-read.table("../Data/ngsadmix/PWS/pws_log_k4", sep="\t", header =FALSE)
+#log5<-read.table("../Data/ngsadmix/PWS/pws_log_k5", sep="\t", header =FALSE)
+#
+#logk2<-log2[c(FALSE,FALSE,TRUE),]
+#logk3<-log3[c(FALSE,FALSE,TRUE),]
+#logk4<-log4[c(FALSE,FALSE,TRUE),]
+#logk5<-log5[c(FALSE,FALSE,TRUE),]
+log2<-read.table("../Data/ngsadmix/PWS/pws_logfile_k2", sep="\t", header =FALSE)
+log3<-read.table("../Data/ngsadmix/PWS/pws_logfile_k3", sep="\t", header =FALSE)
+log4<-read.table("../Data/ngsadmix/PWS/pws_logfile_k4", sep="\t", header =FALSE)
+log5<-read.table("../Data/ngsadmix/PWS/pws_logfile_k5", sep="\t", header =FALSE)
+log6<-read.table("../Data/ngsadmix/PWS/pws_logfile_k6", sep="\t", header =FALSE)
+
+logs1<-data.frame(K=c(rep(2, times=10),rep(3, times=10), rep(4, times=10),rep(5, times=10)), Liklihood=c(log2$V1,log3$V1, log4$V1, log5$V1))
+
+logs2<-data.frame(K=c(rep(2, times=4),rep(3, times=4), rep(4, times=4),rep(5, times=4),rep(6, times=4)), Liklihood=c(log2$V1[1:4],log3$V1[1:4], log4$V1[1:4], log5$V1[1:4],log6$V1[1:4]))
+
+
+#logs<-data.frame(K=c(rep(2, times=10),rep(3, times=9)), Liklihood=c(logk2,logk3))
+#logs<-data.frame(K=c(rep(2, times=5),rep(3, times=5), rep(4, times=5),rep(5, times=5)), Liklihood=c(logk2[1:5],logk3[1:5], logk4, logk5))
+write.table(logs, "../Output/ngsadmix/PWSonly_logs.txt", sep="\t", row.names = F, col.names = F, quote=F)
+write.table(logs1, "../Output/ngsadmix/PWSonly_logs1.txt", sep="\t", row.names = F, col.names = F, quote=F)
+write.table(logs2, "../Output/ngsadmix/PWSonly_logs2.txt", sep="\t", row.names = F, col.names = F, quote=F)
+
+# DO NOT use special character in the file name
+#Must have at least three K values
+
+```
+
+* CLUMPAK suggests K=3 as optimal by Evanno Method
+* However, k with the highest Prob(K=k) is: 6 (or max k)  --not sure how to interpret, but stick to K=3
+
+### FSTruct  
+* Run for all values for comparison
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#all<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pws<-c("PWS91","PWS96","PWS07","PWS17")
+pop_infoP<-pop_info[pop_info$pop=="PWS",]
+cols6<-c('#fbb4ae','#b3cde3','#ccebc5','#decbe4','#fed9a6','#ffffcc')
+
+wilcox<-list()
+for (k in 2:6){
+    qmat<-read.table(paste0("../Data/ngsadmix/PWSonly_pruned_maf05_k",k,".qopt"), header = F)
+    qmat<-cbind(pop_infoP[,c("Sample","Population.Year")], qmat)
+    colnames(qmat)[1:2]<-c("ind","pop")
+    qmat$pop<-factor(qmat$pop, levels=pws)
+    qmat<-qmat[order(qmat$pop),]
+    
+    kmeans<-apply(as.matrix(qmat[qmat$pop==pws[1],3:(k+2)]),2,mean)
+    k_order<-names(kmeans[order(kmeans, decreasing = T)])
+    qmat<-qmat[,c("ind","pop",k_order)]
+    qmat_sorted<-data.frame()
+    for (i in 1:length(pws)){
+        df<-qmat[qmat$pop==pws[i],]
+        df<-df[order(df[,colnames(df)[colnames(df)==k_order[1]]],df[,colnames(df)[colnames(df)==k_order[k]]],decreasing = c(TRUE,FALSE), method="radix"),]
+        qmat_sorted<-rbind(qmat_sorted, df)
+    }
+    
+    nind<-data.frame(pop=pws)
+    nind$n[1]<-nrow(qmat[qmat$pop==pws[1],])
+    nind$mid[1]<-nind$n[1]/2
+    for(i in 2:length(pws)){
+        no<-nrow(qmat[qmat$pop==pws[i],])
+        nind$n[i]<-nind$n[i-1]+no
+        nind$mid[i]<-nind$n[i-1]+no/2
+    }
+
+    qm<-qmat_sorted[,2:(k+2)]
+    Q_plot(Q = qm,K=k)+
+            ggplot2::scale_fill_manual(values=cols6)+
+            ggplot2::scale_color_manual(values=cols6)+
+            ggplot2::scale_x_continuous(labels=pws, breaks=nind$mid)+
+            theme_minimal()+xlab('')+ylab('')+ylim(0,1)+
+            theme(panel.grid=element_blank(), legend.position = "none", axis.text.x = element_text(size=8))+
+            ggplot2::annotate('segment', x=nind$n[1:3]+0.5,y=rep(0, times=3),yend=rep(1, times=3), xend=nind$n[1:3]+0.5,     color="gray30", size=0.3)
+    ggsave(paste0('../Output/ngsadmix/PWSonly_plot_k',k,'.png'), width = 8, height = 3.5, dpi=300)
+           
+    #calculate stats
+    Qs<-list() #Qmatrix
+    for (i in 1: length(pws)){
+        df<-qmat[qmat$pop==pws[i],]
+        Qs[[i]]<-df
+        names(Qs)[i]<-pws[i]
+    }        
+
+    bootstrap <- Q_bootstrap(matrices = Qs,n_replicates = 100,K = k,seed = 1)
+    #This does not save the plots...
+    {png(paste0("../Output/ngsadmix/PWSonly_fstruct_stats_k",k,".png"), width=10, height=7, unit='in', res=300)
+    cowplot::plot_grid(bootstrap$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2::scale_x_discrete(labels=pws), 
+                           bootstrap$plot_violin + ggplot2::ggtitle("Violin Plot")+ggplot2::scale_x_discrete(labels=pws), 
+                           bootstrap$plot_ecdf + ggplot2::ggtitle("ECDF Plot") +
+                               ggplot2::scale_color_brewer(palette = "Dark2", labels=pws), nrow=2)
+    dev.off()}
+
+    wilcox[[k]]<-bootstrap$test_pairwise_wilcox
+}
+
+```
+
+### FSTruct run for optimal K (K=3)  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pws<-c("PWS91","PWS96","PWS07","PWS17")
+pop_infoP<-pop_info[pop_info$pop=="PWS",]
+cols6<-c('#fbb4ae','#b3cde3','#ccebc5','#decbe4','#fed9a6','#ffffcc')
+cols3<-c('#8dd3c7','#ffffb3','#bebada')
+
+
+qmat<-read.table(paste0("../Data/ngsadmix/PWSonly_pruned_maf05_k3.qopt"), header = F)
+qmat<-cbind(pop_infoP[,c("Sample","Population.Year")], qmat)
+colnames(qmat)[1:2]<-c("ind","pop")
+qmat$pop<-factor(qmat$pop, levels=pws)
+qmat<-qmat[order(qmat$pop),]
+
+kmeans<-apply(as.matrix(qmat[qmat$pop==pws[1],3:5]),2,mean)
+k_order<-names(kmeans[order(kmeans, decreasing = T)])
+qmat<-qmat[,c("ind","pop",k_order)]
+qmat_sorted<-data.frame()
+for (i in 1:length(pws)){
+        df<-qmat[qmat$pop==pws[i],]
+        df<-df[order(df[,colnames(df)[colnames(df)==k_order[1]]],df[,colnames(df)[colnames(df)==k_order[3]]],decreasing = c(TRUE,FALSE), method="radix"),]
+        qmat_sorted<-rbind(qmat_sorted, df)
+}
+    
+for (i in 1:length(pws)){
+        df<-qmat[qmat$pop==pws[i],]
+        df<-df[order(df[,colnames(df)[colnames(df)==k_order[2]]],decreasing = c(TRUE), method="radix"),]
+        qmat_sorted<-rbind(qmat_sorted, df)
+}
+nind<-data.frame(pop=pws)
+nind$n[1]<-nrow(qmat[qmat$pop==pws[1],])
+nind$mid[1]<-nind$n[1]/2
+for(i in 2:length(pws)){
+    no<-nrow(qmat[qmat$pop==pws[i],])
+    nind$n[i]<-nind$n[i-1]+no
+    nind$mid[i]<-nind$n[i-1]+no/2
+}
+
+Q_plot(Q = qmat_sorted,K=3)+
+        ggplot2::scale_fill_manual(values=cols3)+
+        ggplot2::scale_color_manual(values=cols3)+
+        ggplot2::scale_x_continuous(labels=pws, breaks=nind$mid)+
+        theme_minimal()+xlab('')+ylab('')+
+        theme(panel.grid=element_blank(), legend.position = "none", axis.text.x = element_text(size=8))+
+        ggplot2::annotate('segment', x=nind$n[1:3]+0.5,y=rep(0, times=3),yend=rep(1, times=3), xend=nind$n[1:3]+0.5,     color="gray30", size=0.3)
+ggsave(paste0('../Output/ngsadmix/PWSonly_OptimalK3.png'), width = 8, height = 3.5, dpi=300)
+           
+#calculate stats
+Qs<-list() #Qmatrix
+for (i in 1: length(pws)){
+    df<-qmat[qmat$pop==pws[i],]
+    Qs[[i]]<-df
+    names(Qs)[i]<-pws[i]
+}        
+bootstrap <- Q_bootstrap(matrices = Qs,n_replicates = 100,K = 3,seed = 1)
+#This does not save the plots...
+{png(paste0("../Output/ngsadmix/PWSonly_fstruct_stats_OptK3.png"), width=10, height=7, unit='in', res=300)
+cowplot::plot_grid(bootstrap$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2::scale_x_discrete(labels=pws), 
+                       bootstrap$plot_violin + ggplot2::ggtitle("Violin Plot")+ggplot2::scale_x_discrete(labels=pws), 
+                       bootstrap$plot_ecdf + ggplot2::ggtitle("ECDF Plot") +
+                               ggplot2::scale_color_brewer(palette = "Dark2", labels=pws), nrow=2)
+dev.off()}
+
+bootstrap$test_pairwise_wilcox
+
+#      PWS91   PWS96   PWS07  
+#PWS96 < 2e-16 -       -      
+#PWS07 < 2e-16 0.13    -      
+#PWS17 3.6e-07 1.0e-14 < 2e-16
+#
+#P value adjustment method: holm 
+
+bootstrap$test_kruskal_wallis
+#data:  all_stats$ratio by all_stats$Matrix
+#Kruskal-Wallis chi-squared = 209.18, df = 3, p-value < 2.2e-16
+
+
+PWS_k3_statistics<-bootstrap$statistics
+```
+
+{png(paste0("Output/ngsadmix/PWSonly_fstruct_stats_OptK3.png"), width=10, height=7, unit='in', res=300)
+cowplot::plot_grid(bootstrap$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2::scale_x_discrete(labels=pws), 
+                       bootstrap$plot_violin + ggplot2::ggtitle("Violin Plot")+ggplot2::scale_x_discrete(labels=pws), 
+                       bootstrap$plot_ecdf + ggplot2::ggtitle("ECDF Plot") +
+                               ggplot2::scale_color_brewer(palette = "Dark2", labels=pws), nrow=2)
+dev.off()}
+
+
+![](../Output/ngsadmix/PWSonly_OptimalK3.png)
+
+![](../Output/ngsadmix/PWSonly_fstruct_stats_OptK3.png)
+
+<br>
+
+## TB
+
+```{bash eval=FALSE, message=FALSE, warning=FALSE}
+#first create ped/bed files with adding variant id
+module load plink
+plink --vcf /home/ktist/ph/data/new_vcf/MD7000/TBonly_NS0.5_maf05.vcf.gz --set-missing-var-ids @:#[ph]\\$r,\\$a --make-bed --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/TBonly_NS0.5_maf05
+
+plink --bfile /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/TBonly_NS0.5_maf05 --recode --tab --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/TBonly_NS0.5_maf05
+
+#find highly correlated sites for pruning
+plink --file /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/TBonly_NS0.5_maf05 --indep-pairwise 50'kb' 5 0.5 --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/TBonly_NS0.5_maf05_50_5_0.5
+
+#Reformat prun.in file with running the reformat_prunin.R
+R
+source("reformat_prunin.R")
+reformat_prunin("ph/data/new_vcf/MD7000/plinkfiles/TBonly_NS0.5_maf05_50_5_0.5.prune.in")
+quit()
+
+## Use bcftools to subset the VCF file with .prune.in.sites.txt
+bcftools index /home/ktist/ph/data/new_vcf/MD7000/TBonly_NS0.5_maf05.vcf.gz 
+
+bcftools view -R /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/TBonly_NS0.5_maf05_50_5_0.5.prune.in.sites.txt  /home/ktist/ph/data/new_vcf/MD7000/TBonly_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/pruned/TBonly_NS0.5_maf05_pruned.vcf
+
+bgzip /home/ktist/ph/data/new_vcf/MD7000/pruned/TBonly_NS0.5_maf05_pruned.vcf
+```
+
+```{r eval=FALSE}
+## Create beagle files
+sink(paste0("../Data/Slurmscripts/beagle_tb.sh"))
+cat("#!/bin/bash -l\n\n")
+cat(paste0("#SBATCH --job-name=beagle \n"))
+cat(paste0("#SBATCH --mem=16G \n")) 
+cat(paste0("#SBATCH --ntasks=8 \n"))
+cat(paste0("#SBATCH -e beagle.err  \n"))
+cat(paste0("#SBATCH --time=72:00:00  \n"))
+cat(paste0("#SBATCH -p high  \n"))
+cat("\n")
+for (i in 1:26){
+   cat(paste0("vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/pruned/TBonly_NS0.5_maf05_pruned.vcf.gz --chr chr1 --out /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_c",i," --BEAGLE-PL \n"))
+}
+cat("\n")
+for (i in 2:26){
+    cat(paste0("sed -e '1, 1d' < /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_c",i,".BEAGLE.PL > /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_c",i,".2.BEAGLE.PL \n"))
+}
+cat("\n")
+
+cat("cat /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_c1.BEAGLE.PL ") 
+for (i in 2:26){
+    cat(paste0("/home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_c",i,".2.BEAGLE.PL "))
+}
+cat(paste0(" > /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_BEAGLE.PL \n"))
+cat("gzip /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_BEAGLE.PL \n\n")
+
+sink(NULL)
+
+#first run once:
+for (i in 2:6) {
+    sink(paste0("../Data/Slurmscripts/RunNGSadmix",i,".sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=admix",i,"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error admix",i,".err\n"))
+    cat("#SBATCH --time=48:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    
+    cat(paste0("NGSadmix -likes /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_BEAGLE.PL.gz -K ",i," -o /home/ktist/ph/data/NGSadmix/PWSonly_pruned_maf05_k",i," \n"))
+    sink(NULL)
+}
 
 
 
 ```
 
-* Resuls from CLUMPAK   
-**"Optimal K by Evanno is: 3 "**
+### Run evalAdmix for TB (locally)
+```{r eval=FALSE}
+sink(paste0("../Data/Slurmscripts/evalAdmix_runlocal_tb.sh"))
+cat("#!/bin/bash \n\n")
+for (i in 2:6){
+    cat(paste0("evalAdmix -beagle Data/ngsadmix/TB/TBonly_pruned_maf05_BEAGLE.PL.gz -fname Data/ngsadmix/TB/TBonly_pruned_maf05_k",i,".fopt.gz -qname Data/ngsadmix/TB/TBonly_pruned_maf05_k",i,".qopt -P 8 -o TBonly.output.corres.k",i,".txt \n"))
+}
+sink(NULL)
+```
+
+
+### NGSadmix and EvalAdmix outputs for TB
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Output files
+qfiles<-list.files("../Data/ngsadmix/TB/",pattern="^TBonly.+.qopt")
+ofiles<-list.files("../Data/ngsadmix/TB/",pattern="^TBonly.+output.corres")
+
+#population info
+pop<-read.csv("../Data/Sample_metadata_892pops.csv")
+tpop<-pop[grepl("TB",pop$Sample),]
+tpop$Population.Year<-factor(tpop$Population.Year, levels=c("TB91","TB96","TB06","TB17"))
+tpoporder<-paste(tpop$Population.Year[order(tpop$Population.Year)])
+tpop_order<-c("TB91","TB96","TB06","TB17")
+
+for (i in 1:length(qfiles)){
+    # extract K from the file name
+    oname<-ofiles[i]
+    k<-as.integer(str_extract(oname, "[[:digit:]]+"))
+    
+    #read the qopt file for k=k
+    q<-read.table(paste0("../Data/ngsadmix/TB/", qfiles[i]))
+    
+    #order according to population and plot the NGSadmix results
+    q$id<-tpop$Population.Year
+    q<-q[order(q$id),]
+    
+    ord<-orderInds(pop = as.vector(tpoporder), q = q[,1:(i+1)])
+    
+    xlabels<-data.frame(x=tapply(1:length(tpoporder),list(tpoporder), mean))
+    xlabels$pop<-factor(rownames(xlabels), levels=tpop_order)
+    xlabels<-xlabels[order(xlabels$pop),]
+    
+    # c('PWS color', 'TB color', 'CA color" )
+    #if (i==1|i==2) colors=c(4,2,7)
+    if (i==1|i==2) colors=c(2,4,7)
+    #colors<-c("#cc79a7","#56b4e9", "#e69f00")
+    #if (i==3) colors=c(5,4,7,2,3) 
+    if (i==3) colors=c(5,2,7,4,3) 
+    if (i==4) colors=c(4,2,5,7,3)
+
+    {png(paste0("../Output/ngsadmix/TBonly_Admix_plot_k",k,".png"), height = 3.5, width=8, unit="in", res=300)
+    barplot(t(q[,1:(i+2)])[,ord],col=colors,space=0,border=NA,xaxt="n",xlab="Population",ylab=paste0("Admixture proportions for K=",k))
+    text(xlabels$x,-0.05,xlabels$pop,xpd=T, srt=90, adj=1,cex=0.8)
+    abline(v=cumsum(sapply(unique(tpoporder[ord]),function(x){sum(tpop[ord,"Population.Year"]==x)})),col=1,lwd=1.2)
+    dev.off()}
+    
+    #Plot the correlation matrix from evalAdmix
+    r<-read.table(paste0("../Data/ngsadmix/TB/",ofiles[i]))
+    
+    # Plot correlation of residuals
+    {pdf(paste0("../Output/ngsadmix/TBonly_evalAdmix_corplot_k",k,".pdf"), height = 8, width=10)
+    plotCorRes(cor_mat = r, pop = as.vector(tpop[,"Population.Year"]), ord = ord, title=paste0("Evaluation of admixture proportions with K=",k), max_z=0.1, min_z=-0.1)
+    dev.off()}
+}
+
+```
+![](../Output/ngsadmix/TBonly_Admix_plot_k2.png)
+
+![](../Output/ngsadmix/TBonly_Admix_plot_k3.png)
+
+![](../Output/ngsadmix/TBonly_Admix_plot_k4.png)
+  
+![](../Output/ngsadmix/TBonly_Admix_plot_k5.png)  
+  
+### Run each k for 5 times to assess the best k  (TB)
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#create slurm scripts to run NGSadmix x 10
+for (i in 2:6) {
+    sink(paste0("../Data/Slurmscripts/NGSadmixT.",i,".sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=admixT.",i,"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error admixT.",i,".err\n"))
+    cat("#SBATCH --time=300:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    
+    for (j in 1:5){
+        cat(paste0("NGSadmix -likes /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_maf05_BEAGLE.PL.gz -K ",i," -o /home/ktist/ph/data/NGSadmix/TBonly_pruned_maf05_k",i,"_run",j," \n"))
+    }
+    sink(NULL)
+}
+```
+
+* Compile all likelihood numbers from log files into 1 (logfile)  
+```{bash eval=FALSE}
+#linux code (won't work for unix)
+(for log in `ls *.log`; do grep -oP 'like=\K[^ ]+' $log; done) > logfile_k3
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+sink(paste0("../Data/Slurmscripts/logfilesP.sh"))
+cat("#!/bin/bash -l\n\n")
+cat(paste0("#SBATCH --job-name=logP \n"))
+cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+cat(paste0("#SBATCH --error logP.err\n"))
+cat("#SBATCH --time=24:00:00
+#SBATCH -p high \n")
+cat("\n")
+for (k in 2:6){
+    cat(paste0("cd /home/ktist/ph/data/NGSadmix/PWS_k",k,"/ \n"))
+    cat("(for log in `ls *.log`; do grep -oP 'like=\\K[^ ]+' $log; done) > logfile_k")
+    cat(paste0(k ," \n"))
+}
+sink(NULL)
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+log2<-read.table("../Data/ngsadmix/TB/tb_log_k2", sep="\t", header =FALSE)
+log3<-read.table("../Data/ngsadmix/TB/tb_log_k3", sep="\t", header =FALSE)
+log4<-read.table("../Data/ngsadmix/TB/tb_log_k4", sep="\t", header =FALSE)
+log5<-read.table("../Data/ngsadmix/TB/tb_log_k5", sep="\t", header =FALSE)
+log6<-read.table("../Data/ngsadmix/TB/tb_log_k6", sep="\t", header =FALSE)
+
+#logs<-data.frame(K=c(rep(2, times=5),rep(3, times=5), rep(4, times=5),rep(5, times=5)), Liklihood=c(logk2[1:5],logk3[1:5], logk4, logk5))
+
+logs<-data.frame(K=c(rep(2, times=3),rep(3, times=3), rep(4, times=3),rep(5, times=3),rep(6, times=3)), Liklihood=c(log2$V1[1:3],log3$V1[1:3], log4$V1[1:3], log5$V1,log6$V1))
+write.table(logs, "../Output/ngsadmix/TBonly_logs.txt", sep="\t", row.names = F, col.names = F, quote=F)
+
+# DO NOT use special character in the file name
+#Must have at least three K values
+
+```
+* k=3 is best by Evanno 
+
+
+### FSTruct for TB only
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+tb<-c("TB91","TB96","TB06","TB17")
+pop_infoT<-pop_info[pop_info$pop=="TB",]
+
+qmat<-read.table(paste0("../Data/ngsadmix/TB/TBonly_pruned_maf05_k3.qopt"), header = F)
+qmat<-cbind(pop_infoT[,c("Sample","Population.Year")], qmat)
+colnames(qmat)[1:2]<-c("ind","pop")
+qmat$pop<-factor(qmat$pop, levels=tb)
+qmat<-qmat[order(qmat$pop),]
+
+kmeans<-apply(as.matrix(qmat[qmat$pop==tb[1],3:5]),2,mean)
+k_order<-names(kmeans[order(kmeans, decreasing = T)])
+qmat<-qmat[,c("ind","pop",k_order)]
+qmat_sorted<-data.frame()
+for (i in 1:length(tb)){
+    df<-qmat[qmat$pop==tb[i],]
+    df<-df[order(df[,colnames(df)[colnames(df)==k_order[1]]],df[,colnames(df)[colnames(df)==k_order[3]]],decreasing = c(TRUE,FALSE), method="radix"),]
+    qmat_sorted<-rbind(qmat_sorted, df)
+}
+    
+nind<-data.frame(pop=tb)
+nind$n[1]<-nrow(qmat[qmat$pop==tb[1],])
+nind$mid[1]<-nind$n[1]/2
+for(i in 2:length(tb)){
+    no<-nrow(qmat[qmat$pop==tb[i],])
+    nind$n[i]<-nind$n[i-1]+no
+    nind$mid[i]<-nind$n[i-1]+no/2
+}
+
+qm<-qmat_sorted[,2:4]
+Q_plot(Q = qmat_sorted,K=3)+
+            ggplot2::scale_fill_manual(values=cols3)+
+            ggplot2::scale_color_manual(values=cols3)+
+            ggplot2::scale_x_continuous(labels=tb, breaks=nind$mid)+
+            theme_minimal()+xlab('')+ylab('')+
+            theme(panel.grid=element_blank(), legend.position = "none", axis.text.x = element_text(size=8))+
+            ggplot2::annotate('segment', x=nind$n[1:3]+0.5,y=rep(0, times=3),yend=rep(1, times=3), xend=nind$n[1:3]+0.5,     color="gray30", size=0.3)
+ggsave(paste0('../Output/ngsadmix/TBonly_plot_Optimal.K3.png'), width = 8.2, height = 3.5, dpi=300)
+       
+#calculate stats
+    Qs<-list() #Qmatrix
+    for (i in 1: length(tb)){
+        df<-qmat[qmat$pop==tb[i],]
+        Qs[[i]]<-df
+        names(Qs)[i]<-tb[i]
+    }        
+
+bootstrap <- Q_bootstrap(matrices = Qs,n_replicates = 100,K = 3,seed = 1)
+cowplot::plot_grid(bootstrap$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2::scale_x_discrete(labels=tb), 
+                       bootstrap$plot_violin + ggplot2::ggtitle("Violin Plot")+ggplot2::scale_x_discrete(labels=tb), 
+                       bootstrap$plot_ecdf + ggplot2::ggtitle("ECDF Plot") +
+                           ggplot2::scale_color_brewer(palette = "Dark2", labels=tb), nrow=2)
+ggsave(paste0("../Output/ngsadmix/TBonly_fstruct_stats_OPTIAML.k3.png"), width=10, height=7, dpi=300)
+
+bootstrap$test_pairwise_wilcox
+#     TB91   TB96   TB06  
+#TB96 1e-06  -      -     
+#TB06 <2e-16 <2e-16 -     
+#TB17 <2e-16 <2e-16 <2e-16
+
+```
+![](../Output/ngsadmix/TBonly_plot_Optimal.K3.png)  
+
+![](../Output/ngsadmix/TBonly_fstruct_stats_OPTIAML.k3.png)
+
+
+
+
+## Run NGSadmix for SS
+
+```{bash eval=FALSE, message=FALSE, warning=FALSE}
+#first create ped/bed files with adding variant id
+module load plink
+plink --vcf /home/ktist/ph/data/new_vcf/MD7000/SSonly_NS0.5_maf05.vcf.gz --set-missing-var-ids @:#[ph]\\$r,\\$a --make-bed --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/SSonly_NS0.5_maf05
+
+plink --bfile /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/SSonly_NS0.5_maf05 --recode --tab --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/SSonly_NS0.5_maf05
+
+#find highly correlated sites for pruning
+plink --file /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/SSonly_NS0.5_maf05 --indep-pairwise 50'kb' 5 0.5 --out /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/SSonly_NS0.5_maf05_50_5_0.5
+
+#Reformat prun.in file with running the reformat_prunin.R
+R
+source("reformat_prunin.R")
+reformat_prunin("ph/data/new_vcf/MD7000/plinkfiles/SSonly_NS0.5_maf05_50_5_0.5.prune.in")
+quit()
+
+## Use bcftools to subset the VCF file with .prune.in.sites.txt
+bcftools index /home/ktist/ph/data/new_vcf/MD7000/SSonly_NS0.5_maf05.vcf.gz 
+
+bcftools view -R /home/ktist/ph/data/new_vcf/MD7000/plinkfiles/SSonly_NS0.5_maf05_50_5_0.5.prune.in.sites.txt  /home/ktist/ph/data/new_vcf/MD7000/SSonly_NS0.5_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/pruned/SSonly_NS0.5_maf05_pruned.vcf
+
+bgzip /home/ktist/ph/data/new_vcf/MD7000/pruned/SSonly_NS0.5_maf05_pruned.vcf
+```
+
+```{r eval=FALSE}
+## Create beagle files
+sink(paste0("../Data/Slurmscripts/beagle_ss.sh"))
+cat("#!/bin/bash -l\n\n")
+cat(paste0("#SBATCH --job-name=beagle \n"))
+cat(paste0("#SBATCH --mem=16G \n")) 
+cat(paste0("#SBATCH --ntasks=8 \n"))
+cat(paste0("#SBATCH -e beagle.err  \n"))
+cat(paste0("#SBATCH --time=72:00:00  \n"))
+cat(paste0("#SBATCH -p high  \n"))
+cat("\n")
+for (i in 1:26){
+   cat(paste0("vcftools --gzvcf /home/ktist/ph/data/new_vcf/MD7000/pruned/SSonly_NS0.5_maf05_pruned.vcf.gz --chr chr1 --out /home/ktist/ph/data/new_vcf/MD7000/beagle/SSonly_pruned_c",i," --BEAGLE-PL \n"))
+}
+cat("\n")
+for (i in 2:26){
+    cat(paste0("sed -e '1, 1d' < /home/ktist/ph/data/new_vcf/MD7000/beagle/SSonly_pruned_c",i,".BEAGLE.PL > /home/ktist/ph/data/new_vcf/MD7000/beagle/SSonly_pruned_c",i,".2.BEAGLE.PL \n"))
+}
+cat("\n")
+
+cat("cat /home/ktist/ph/data/new_vcf/MD7000/beagle/SSonly_pruned_c1.BEAGLE.PL ") 
+for (i in 2:26){
+    cat(paste0("/home/ktist/ph/data/new_vcf/MD7000/beagle/SSonly_pruned_c",i,".2.BEAGLE.PL "))
+}
+cat(paste0(" > /home/ktist/ph/data/new_vcf/MD7000/beagle/SSonly_pruned_maf05_BEAGLE.PL \n"))
+cat("gzip /home/ktist/ph/data/new_vcf/MD7000/beagle/SSonly_pruned_maf05_BEAGLE.PL \n\n")
+
+sink(NULL)
+
+#first run once:
+for (i in 2:6) {
+    sink(paste0("../Data/Slurmscripts/RunNGSadmixS",i,".sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=admixS",i,"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error admixS",i,".err\n"))
+    cat("#SBATCH --time=48:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    
+    cat(paste0("NGSadmix -likes /home/ktist/ph/data/new_vcf/MD7000/beagle/SSonly_pruned_maf05_BEAGLE.PL.gz -K ",i," -o /home/ktist/ph/data/NGSadmix/SSonly_pruned_maf05_k",i," \n"))
+    sink(NULL)
+}
+
+
+
+```
+
+## Run evalAdmix for SS (locally)
+```{r eval=FALSE}
+sink(paste0("../Data/Slurmscripts/evalAdmix_runlocal_ss.sh"))
+cat("#!/bin/bash \n\n")
+for (i in 2:6){
+    cat(paste0("evalAdmix -beagle Data/ngsadmix/SS/SSonly_pruned_maf05_BEAGLE.PL.gz -fname Data/ngsadmix/SS/SSonly_pruned_maf05_k",i,".fopt.gz -qname Data/ngsadmix/SS/SSonly_pruned_maf05_k",i,".qopt -P 8 -o SSonly_output.corres.k",i,".txt \n"))
+}
+sink(NULL)
+```
+
+## NGSadmix and EvalAdmix outputs for SS
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Output files
+qfiles<-list.files("../Data/ngsadmix/SS/",pattern="^SSonly.+.qopt")
+ofiles<-list.files("../Data/ngsadmix/SS/",pattern="^SSonly.+output.corres")
+
+#population info
+pop<-read.csv("../Data/Sample_metadata_892pops.csv")
+spop<-pop[grepl("SS",pop$Sample),]
+spop$Population.Year<-factor(spop$Population.Year, levels=c("SS96","SS06","SS17"))
+spoporder<-paste(spop$Population.Year[order(spop$Population.Year)])
+spop_order<-c("SS96","SS06","SS17")
+
+for (i in 1:length(qfiles)){
+    # extract K from the file name
+    oname<-qfiles[i]
+    k<-as.integer(str_extract(oname, "[[:digit:]]+"))
+    
+    #read the qopt file for k=k
+    q<-read.table(paste0("../Data/ngsadmix/SS/", qfiles[i]))
+    
+    #order according to population and plot the NGSadmix results
+    q$id<-spop$Population.Year
+    q<-q[order(q$id),]
+    
+    ord<-orderInds(pop = as.vector(spoporder), q = q[,1:(i+1)])
+    
+    xlabels<-data.frame(x=tapply(1:length(spoporder),list(spoporder), mean))
+    xlabels$pop<-factor(rownames(xlabels), levels=spop_order)
+    xlabels<-xlabels[order(xlabels$pop),]
+    
+    if (i==1|i==2) colors=c(2,4,7)
+    if (i==3) colors=c(5,2,7,4,3) 
+    if (i==4|i==5) colors=c(4,2,5,7,3)
+
+    {png(paste0("../Output/ngsadmix/SSonly_Admix_plot_k",k,".png"), height = 3.5, width=6, unit="in", res=300)
+    barplot(t(q[,1:(i+2)])[,ord],col=colors,space=0,border=NA,xaxt="n",xlab="Population",ylab=paste0("Admixture proportions for K=",k))
+    text(xlabels$x,-0.05,xlabels$pop,xpd=T, srt=90, adj=1,cex=0.8)
+    abline(v=cumsum(sapply(unique(spoporder[ord]),function(x){sum(spop[ord,"Population.Year"]==x)})),col=1,lwd=1.2)
+    dev.off()}
+    
+    #Plot the correlation matrix from evalAdmix
+    r<-read.table(paste0("../Data/ngsadmix/SS/",ofiles[i]))
+    
+    # Plot correlation of residuals
+    {pdf(paste0("../Output/ngsadmix/SSonly_evalAdmix_corplot_k",k,".pdf"), height = 6, width=8)
+    plotCorRes(cor_mat = r, pop = as.vector(spop[,"Population.Year"]), ord = ord, title=paste0("Evaluation of admixture proportions with K=",k), max_z=0.1, min_z=-0.1)
+    dev.off()}
+}
+
+```
+![](../Output/ngsadmix/SSonly_Admix_plot_k2.png)  
+![](../Output/ngsadmix/SSonly_Admix_plot_k3.png)  
+
+### Run each k for 5 times to assess the best k  (SS)
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#create slurm scripts to run NGSadmix x 10
+for (i in 2:5) {
+    sink(paste0("../Data/Slurmscripts/NGSadmixS.",i,".sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=admixS.",i,"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error admixS.",i,".err\n"))
+    cat("#SBATCH --time=300:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    
+    for (j in 1:5){
+        cat(paste0("NGSadmix -likes /home/ktist/ph/data/new_vcf/MD7000/beagle/TBonly_pruned_maf05_BEAGLE.PL.gz -K ",i," -o /home/ktist/ph/data/NGSadmix/SSonly_pruned_maf05_k",i,"_run",j," \n"))
+    }
+    sink(NULL)
+}
+
+```
+
+### FSTruct for SS
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+ss<-c("SS96","SS06","SS17")
+pop_infoS<-pop_info[pop_info$pop=="SS",]
+
+qmat<-read.table(paste0("../Data/ngsadmix/SS/SSonly_pruned_maf05_k3.qopt"), header = F)
+qmat<-cbind(pop_infoS[,c("Sample","Population.Year")], qmat)
+colnames(qmat)[1:2]<-c("ind","pop")
+qmat$pop<-factor(qmat$pop, levels=ss)
+qmat<-qmat[order(qmat$pop),]
+
+kmeans<-apply(as.matrix(qmat[qmat$pop==ss[1],3:5]),2,mean)
+k_order<-names(kmeans[order(kmeans, decreasing = T)])
+qmat<-qmat[,c("ind","pop",k_order)]
+qmat_sorted<-data.frame()
+for (i in 1:length(ss)){
+    df<-qmat[qmat$pop==ss[i],]
+    df<-df[order(df[,colnames(df)[colnames(df)==k_order[1]]],df[,colnames(df)[colnames(df)==k_order[3]]],decreasing = c(TRUE,FALSE), method="radix"),]
+    qmat_sorted<-rbind(qmat_sorted, df)
+}
+    
+nind<-data.frame(pop=ss)
+nind$n[1]<-nrow(qmat[qmat$pop==ss[1],])
+nind$mid[1]<-nind$n[1]/2
+for(i in 2:length(ss)){
+    no<-nrow(qmat[qmat$pop==ss[i],])
+    nind$n[i]<-nind$n[i-1]+no
+    nind$mid[i]<-nind$n[i-1]+no/2
+}
+
+Q_plot(Q = qmat_sorted,K=3)+
+            ggplot2::scale_fill_manual(values=cols3)+
+            ggplot2::scale_color_manual(values=cols3)+
+            ggplot2::scale_x_continuous(labels=ss, breaks=nind$mid)+
+            theme_minimal()+xlab('')+ylab('')+
+            theme(panel.grid=element_blank(), legend.position = "none", axis.text.x = element_text(size=8))+
+            ggplot2::annotate('segment', x=nind$n[1:3]+0.5,y=rep(0, times=3),yend=rep(1, times=3), xend=nind$n[1:3]+0.5,     color="gray30", size=0.3)
+ggsave(paste0('../Output/ngsadmix/SSonly_plot_Optimal.K3.png'), width = 8.2, height = 3.5, dpi=300)
+       
+#calculate stats
+Qs<-list() #Qmatrix
+for (i in 1: length(ss)){
+    df<-qmat[qmat$pop==ss[i],]
+    Qs[[i]]<-df
+    names(Qs)[i]<-ss[i]
+}        
+bootstrap <- Q_bootstrap(matrices = Qs,n_replicates = 100,K = 3,seed = 1)
+cowplot::plot_grid(bootstrap$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2::scale_x_discrete(labels=ss), 
+                       bootstrap$plot_violin + ggplot2::ggtitle("Violin Plot")+ggplot2::scale_x_discrete(labels=ss), 
+                       bootstrap$plot_ecdf + ggplot2::ggtitle("ECDF Plot") +
+                           ggplot2::scale_color_brewer(palette = "Dark2", labels=ss), nrow=2)
+ggsave(paste0("../Output/ngsadmix/SSonly_fstruct_stats_OPTIAML.k3.png"), width=10, height=7, dpi=300)
+
+bootstrap$test_pairwise_wilcox
+#     SS96    SS06   
+#SS06 7.5e-07 -      
+#SS17 0.15    8.4e-09
+
+bootstrap$test_kruskal_wallis
+#Kruskal-Wallis chi-squared = 42.173, df = 2, p-value = 6.955e-10
+
+```
+![](../Output/ngsadmix/SSonly_plot_Optimal.K3.png)  
+
+![](../Output/ngsadmix/SSonly_fstruct_stats_OPTIAML.k3.png)
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+```
+
+
 

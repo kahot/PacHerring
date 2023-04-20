@@ -81,7 +81,7 @@ calcpL <- function(thetachange, null){ # for decreases in theta
 }
 
 
-cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
+ch_cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
 Datall<-data.table()
 for (p in 1: nrow(comb)){
     # max theta per genome from reshuffling (all sites) from angsd_theta_siteshuffle_null.r
@@ -135,11 +135,11 @@ winsz = 5e4
 #Changes in Pi between years
 Datall$Chromo<-factor(Datall$Chromo, levels=c(paste0("chr",1:26)))
 Datall$pop<-factor(Datall$pop, levels=c("PWS91_PWS96","PWS91_PWS07","PWS91_PWS17","PWS96_PWS07","PWS96_PWS17","PWS07_PWS17"))
-
+ch_cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
 ggplot(Datall, aes(POSgen, tPd/winsz, color = Chromo)) + 
     geom_point(size = 0.5, alpha = 0.3) +
     facet_wrap(~pop, ncol = 1) +
-    scale_color_manual(values = cols, guide="none") +
+    scale_color_manual(values = ch_cols, guide="none") +
     ylab('Change in pi per site')+xlab("Chromosome")+
     ggtitle("Changes in Pi")+
     scale_x_continuous(breaks=chrmax$middle, labels=1:26)+
@@ -149,7 +149,7 @@ ggsave(paste0('../Output/Pi/Shuffle/Changes_in_Pi_PWS.png'), width = 7.5, height
 # plot theta_Watterson change
 ggplot(Datall, aes(POSgen, tWd/winsz, color = Chromo)) + 
   geom_point(size = 0.5, alpha = 0.3) +
-  scale_color_manual(values = cols, guide="none") +
+  scale_color_manual(values = ch_cols, guide="none") +
     facet_wrap(~pop, ncol = 1) +
   ylab('Change in Wattersons theta per site')+xlab("Chromosome")+
   ggtitle("Changes in Pi")+
@@ -160,7 +160,7 @@ ggsave('../Output/Pi/Shuffle/Changes_in_thetaW_PWS.png', width = 7.5, height = 9
 # plot Tajima's D change
 ggplot(Datall, aes(POSgen, tDd, color = Chromo)) + 
     geom_point(size = 0.5, alpha = 0.3) +
-    scale_color_manual(values = cols,guide="none") +
+    scale_color_manual(values = ch_cols,guide="none") +
     facet_wrap(~pop, ncol = 1) +
     ylab('Change in Tajimas D per window')+xlab("Chromosome")+
     ggtitle("Changes in Tajima's D")+
@@ -179,14 +179,14 @@ ggsave('../Output/Pi/Shuffle/Changes_in_TajimasD_PWS.png', width = 7.5, height =
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
 # plot pi p-value vs. position 
-cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
+ch_cols <- brewer.pal(4, 'Paired')[rep(1:2,13)]
 Datall$Chromo<-factor(Datall$Chromo, levels=c(paste0("chr",1:26)))
 Datall$pop<-factor(Datall$pop, levels=c("PWS91_PWS96","PWS91_PWS07","PWS91_PWS17","PWS96_PWS07","PWS96_PWS17","PWS07_PWS17"))
 
 ggplot(Datall, aes(POSgen, -log10(tPd.p)*sign(tPd), color = Chromo)) + 
     geom_point(size = 0.4, alpha = 0.3) +
     facet_wrap(~pop, ncol = 1) +
-    scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+    scale_color_manual(values = ch_cols, guide="none") +xlab("Chromosome")+
     ylab("log10(P-value)")+
     geom_hline(yintercept = log10(0.05), linetype = 'dashed', color = 'red',size=0.3) +
     geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'red', size=0.3)+
@@ -200,7 +200,7 @@ ggsave('../Output/Pi/Shuffle/Changes_in_Pi.siteshuffle.p-values_PWS.png', width 
 ggplot(Datall, aes(POSgen, -log10(tWd.p)*sign(tWd), color = Chromo)) + 
   geom_point(size = 0.4, alpha = 0.3) +
   facet_wrap(~pop, ncol = 1) +
-  scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+  scale_color_manual(values = ch_cols, guide="none") +xlab("Chromosome")+
     ylab("log10(P-value)")+
   geom_hline(yintercept = log10(0.05), linetype = 'dashed', color = 'red', size=0.3) +
   geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'red', size=0.3)+
@@ -213,7 +213,7 @@ ggsave('../Output/Pi/Shuffle/Changes_in_thetaW.siteshuffle.p-values_PWS.png', wi
 ggplot(Datall, aes(POSgen, -log10(tDd.p)*sign(tDd), color = Chromo)) + 
     geom_point(size = 0.4, alpha = 0.3) +
     facet_wrap(~pop, ncol = 1) +
-    scale_color_manual(values = cols, guide="none") +xlab("Chromosome")+
+    scale_color_manual(values = ch_cols, guide="none") +xlab("Chromosome")+
     ylab("log10(P-value)")+
     geom_hline(yintercept = log10(0.05), linetype = 'dashed',  color = 'red', size=0.3) +
     geom_hline(yintercept = -log10(0.05), linetype = 'dashed', color = 'red', size=0.3)+
@@ -288,7 +288,7 @@ ggplot(pi3, aes(x=Var1, y=Freq, fill=Var1))+
     scale_fill_manual(values=div2)+
     theme_classic()+
     theme(axis.text.x = element_text(angle=45, hjust=1), legend.title = element_blank())+
-    ggtitle(expression(paste("Changes in ", pi)))+
+    ggtitle(expression(paste("Changes in ", pi, " (shuffle)")))+
     xlab('')+ylab('Number of regions with P<0.05')
 ggsave("../Output/Pi/Shuffle/Pi_significant_perComparison_ordered.png", width = 5, height = 4, dpi=300) 
 

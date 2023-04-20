@@ -61,18 +61,25 @@ bash script_GONE.sh PWS17_maf00
 ```
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
-#inport the output file
+#import the output file
 library(ggplot2)
 ne<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/PWS17_hc0.05/Output_Ne_PWS17_maf00", skip=1, header=T)
 
 ggplot(ne, aes(x=Generation, y=Geometric_mean))+
-    geom_line()+ylab("Ne")+theme_bw()
+    geom_line()+ylab("Ne")+theme_bw()+ggtitle("PWS MAF00")
 ggsave("../Output/Ne/Gone/PWS_recent_ne.by.Gone.png", width = 6, height = 4, dpi=300)
+
+#zoom in to more recent
+ggplot(ne[ne$Generation<200,], aes(x=Generation, y=Geometric_mean))+
+    geom_line()+ylab("Ne")+theme_bw()+ggtitle("PWS MAF00")
+ggsave("../Output/Ne/Gone/PWS_recent_ne.by.Gone_200yr.png", width = 6, height = 4, dpi=300)
+
+
 # From tutorial: "unbiased estimates require that the population is a closed one without recent admixture from other populations. If this is not the case, some artefacts may arise."
 # "the reliable estimates to be considered should be for a maximum of 100 or 200 generations"
 ```
 
-![](../Output/Ne/Gone/PWS_recent_ne.by.Gone.png)
+![](../Output/Ne/Gone/PWS_recent_ne.by.Gone_200yr.png)
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
 #Run with hc=0.01 (recomibnation -recommended for the admix population, instead of hc=0.05)
@@ -95,19 +102,24 @@ ggplot(neS, aes(x=Generation, y=Geometric_mean))+
     geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+
     ggtitle("SS17")
 ggsave("../Output/Ne/Gone/SS_recent_ne.by.Gone_hc0.01.png", width = 6, height = 4, dpi=300)
-#
+
+ggplot(neS, aes(x=Generation, y=Geometric_mean))+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,200)+
+    ggtitle("SS17")
+ggsave("../Output/Ne/Gone/SS_recent_ne.by.Gone_hc0.01_200yr.png", width = 6, height = 4, dpi=300)
+
 ```
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
 neT<-read.table("/Users/kahotisthammer/programs/GONE/MacOSX/Output_Ne_TB17_maf00", skip=1, header=T)
 
 ggplot(neT, aes(x=Generation, y=Geometric_mean))+
-    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,200)+
     ggtitle("TB17")
-ggsave("../Output/Ne/Gone/SS_recent_ne.by.Gone.png", width = 6, height = 4, dpi=300)
+ggsave("../Output/Ne/Gone/TB_recent_ne.by.Gone_200yr.png", width = 6, height = 4, dpi=300)
 ```
-![](../Output/Ne/Gone/SS_recent_ne.by.Gone.png)
-
+![](../Output/Ne/Gone/SS_recent_ne.by.Gone_hc0.01_200yr.png)
+![](../Output/Ne/Gone/TB_recent_ne.by.Gone_200yr.png)
 
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
@@ -119,7 +131,7 @@ neT$pop<-"TB"
 ne<-rbind(ne, neS,neT)
 
 ggplot(ne, aes(x=Generation, y=Geometric_mean, color=pop))+
-    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,200)+
     ggtitle("2017 Data")+
     theme(legend.title = element_blank())
 ggsave("../Output/Ne/Gone/3pop2017_recent_ne.by.Gone.png", width = 6.5, height = 4, dpi=300)
@@ -139,19 +151,19 @@ ne3$pop<-"TB"
 
 neall<-rbind(ne1,ne2,ne3)
 ggplot(neall, aes(x=Generation, y=Geometric_mean, color=pop))+
-    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,200)+
     ggtitle("1996 Data")+theme(legend.title = element_blank())
 ggsave("../Output/Ne/Gone/3pop1996_recent_ne.by.Gone.png", width = 6.5, height = 4, dpi=300)
 
 ggplot(neall, aes(x=Generation, y=Geometric_mean, color=pop))+
-    geom_line()+ylab("Ne")+theme_bw()+xlim(0,400)+ylim(4000000,5000000)
+    geom_line()+ylab("Ne")+theme_bw()+xlim(0,200)+ylim(4960000,5010000)
     ggtitle("1996 Data")+theme(legend.title = element_blank())
-ggsave("../Output/Ne/Gone/3pop1996_recent_ne.by.Gone_yscaled.png", width = 6.5, height = 4, dpi=300)
+ggsave("../Output/Ne/Gone/3pop1996_recent_ne.by.Gone_yscaled_200yr.png", width = 6.5, height = 4, dpi=300)
 #mostly same
 ```
 ![](../Output/Ne/Gone/3pop1996_recent_ne.by.Gone.png)
 
 
-![](../Output/Ne/Gone/3pop1996_recent_ne.by.Gone.png)
+![](../Output/Ne/Gone/3pop1996_recent_ne.by.Gone_200yr.png)
 
 

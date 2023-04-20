@@ -81,6 +81,7 @@ sites <- data.frame(location= c("Cordova","Togiak Bay", "Sitka Sound", "Green Is
                     pop_latitude=  c(60.54,58.8,56.93,60.54,47.6,58.8,60.54,37.69,52.1,60.54))
 simple_pops <- read.table("/Volumes/Kaho_Data/PacHerring/Data/familiarize/simple_pops_size.txt",header = TRUE, stringsAsFactors = FALSE, sep = "\t")
 
+write.csv(sites, "../Data/Sampling_sites_coordinates.csv")
 
 # all populations
 ggplot(data = world) +

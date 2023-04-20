@@ -1,0 +1,1598 @@
+---
+title: "used_code"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+This is the code used for the data analysis and visualization of Poell, et al. ACE: Absolute Copy number Estimation from low-coverage whole-genome sequencing. It reproduces the steps to get to the presented data. However, a much smaller bootstrapping is presented in order to run it simply through this Rmarkdown file. The number of repeats per tumor DNA percentage were reduced from 10 to 2 and the sampled reads were reduced from 10 million to 2 million. Additionally, only data on the 1,000 bin size analysis are used. The resulting data from the full benchmarking and bootstrapping is included in the data file, so the figures can still be reproduced. Note that for final figure production, Adobe Illustrator was used.
+
+
+## loading required libraries
+
+```{r libraries}
+# ACE can be installed using the devtools-function install_github()
+# In this case, you also need the devtools package
+# Optionally, you can use the argument build_vignettes = TRUE
+# devtools::install_github("tgac-vumc/ACE")
+# ACE is (or will soon become) available via Bioconductor
+#source("https://bioconductor.org/biocLite.R")
+BiocManager::install("ACE")
+library(ACE)
+# source("https://bioconductor.org/biocLite.R")
+BiocManager::install("Biobase")
+library(Biobase)
+# source("https://bioconductor.org/biocLite.R")
+BiocManager::install("QDNAseq")
+library(QDNAseq)
+# install.packages("ggplot2")
+library(ggplot2)
+#install.packages("lemon")
+library(lemon)
+# install.packages("dplyr")
+library(dplyr)
+# the package archive for ABSOLUTE must be requested through the BROAD institute
+install.packages("numDeriv")
+# run 'R CMD INSTALL ABSOLUTE_1.0.6.tar.gz' in the terminal
+BiocManager::install("geneplotter")
+#R CMD INSTALL HAPSEG_1.1.1.tar.gz
+library(ABSOLUTE)
+
+# I have installed ichorCNA via the git repository (see below)
+# it requires the following dependencies
+# install.packages("plyr")
+# install.packages("optparse")
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("HMMcopy")
+# biocLite("GenomeInfoDb")
+```
+
+We note that ichorCNA was run via the command prompt using Rscript runIchorCNA.R 
+
+
+## loading the data
+
+The data supplied with the scientific paper encompasses read counts for three cell lines and a normal control, segment data which is derived from the former, and the results of the benchmarking of ACE against ABSOLUTE and ichorCNA. All of these data are preprocessed to a certain extent. The first steps from the raw (sequencing data) were as follows (also described in the supplementary methods): sequencing reads were mapped to the human genome (hg19) using bwa mem. Mapped reads were binned using QDNAseq with a bin size of 1,000 kilobases. Segmented data were obtained as can be seen in the following code:  
+
+```{r data}
+load("../bty1055-Suppl_data/supp_data.RDATA")
+readCountsFiltered <- QDNAseq::applyFilters(data_readcounts, residual = TRUE, blacklist = TRUE)
+readCountsFiltered <- QDNAseq::estimateCorrection(readCountsFiltered)
+copyNumbers <- QDNAseq::correctBins(readCountsFiltered)
+copyNumbers <- QDNAseq::normalizeBins(copyNumbers)
+copyNumbers <- QDNAseq::smoothOutlierBins(copyNumbers)
+copyNumbersSegmented <- QDNAseq::segmentBins(copyNumbers, transformFun = 'sqrt')
+copyNumbersSegmented <- QDNAseq::normalizeSegmentedBins(copyNumbersSegmented)
+```
+
+Note that the segmentation program involves random number generation, therefore results can have slight deviations when the seeds are not given. In this case, copyNumbersSegmented will be very similar to data_segmented, but may have some tiny differences in values.
+
+Since Figure 1 already uses an admixed sample, let's go right ahead and throw in the admix function
+
+
+```{r admix function}
+# A bit of explanation on this function. The arguments tumor and normal need to
+# be vectors of equal length, representing the reads in each bin of the two
+# samples to make an admixture of. tdp is a vector with all the tumor DNA
+# percentages you want to test. This is generally 0:100, but you can increase or
+# decrease "resolution" as needed. repeats indicates the number of times each
+# tested tumor DNA percentage is sampled. I have used 10 repeats. The function
+# returns a matrix that is easily turned into a QDNAseqReadCounts-object.
+admix <- function(tumor,normal,tdp=50,Mreads=10,repeats=1) {
+  if(length(tumor)!=length(normal)) {print("Tumor and normal need to be vectors of equal length, representing the same features, e.g. probe, bin, gene")}
+  mat <- matrix(nrow=length(tumor),ncol = length(tdp)*repeats)
+  feat <- seq_along(tumor)
+  colnames(mat) <- 1:(length(tdp)*repeats)
+  counter <- 1
+  for (i in tdp) {
+    for (j in seq_len(repeats)) {
+      # This is where the sampling happens. Notice that I explode the reads by
+      # sampling from rep(feat,tumor) and rep(feat,normal). Alternatively, it
+      # should be possible to sample from feat using tumor as the prob argument
+      # of sample. I do not know which is faster, but the latter also allows the
+      # use of non-integer data. In the end, I add 1 "read" of each feature,
+      # then tabulate, then substract 1 from all, to ensure all features are
+      # included in the tabulate call.
+      mat[,counter] <- as.vector(table(c(sample(rep(feat,tumor),i*Mreads*10000,replace = TRUE),
+                                         sample(rep(feat,normal),(100-i)*Mreads*10000,replace = TRUE),
+                                         1:length(tumor))))-1
+      colnames(mat)[counter] <- paste0("TvN_",i,"_",j)
+      counter <- counter + 1
+    }
+  }
+  return(mat)
+}
+
+# I also wrote a short function for readcounts to segmented data to reduce code
+rctosegmented <- function(object, saveobject = TRUE, filename, exclude = c("X", "Y", "MT")) {
+  readCountsFiltered <- QDNAseq::applyFilters(object, residual = TRUE, blacklist = TRUE, chromosomes = exclude)
+  readCountsFiltered <- QDNAseq::estimateCorrection(readCountsFiltered)
+  # the default correctBins will output a ratio; using method = 'median' will return a corrected readcount
+  copyNumbers <- QDNAseq::correctBins(readCountsFiltered)
+  copyNumbers <- QDNAseq::normalizeBins(copyNumbers)
+  copyNumbers <- QDNAseq::smoothOutlierBins(copyNumbers)
+  copyNumbersSegmented <- QDNAseq::segmentBins(copyNumbers, transformFun = 'sqrt') # the transformFun is not available in older versions of QDNAseq!
+  copyNumbersSegmented <- QDNAseq::normalizeSegmentedBins(copyNumbersSegmented)
+  if(saveobject==TRUE&&!missing(filename)) {
+    saveRDS(copyNumbersSegmented, filename)
+  } else if(saveobject==TRUE) {print("Cannot save RDS-file without a valid filename")}
+  return(copyNumbersSegmented)
+}
+```
+
+
+## Figure 1
+
+Figure 1 was made using a sample of which the reads were binned in 100 kilobases size bins. Since this is not supplied in supplementary data, I will demonstrate with 1000 kbp. 
+
+Figure 1A
+
+```{r Figure 1A}
+# if you want to make the plots, ensure the directory exists
+dir.create("plots")
+# I chose to analyze a "sample" with 20% tumor DNA percentage
+tumor <- as.vector(assayData(data_readcounts)$counts[,2])
+normal <- as.vector(assayData(data_readcounts)$counts[,1])
+mat <- admix(tumor, normal, tdp = 20)
+# to create a QDNAseqReadCounts-object, we need bin annotations
+bins <- QDNAseq::getBinAnnotations(binSize = 1000, genome = "hg19")
+rownames(mat) <- rownames(bins)
+# we also need to create the phenodata
+phenodata = data.frame(name=colnames(mat),row.names = colnames(mat))
+# here we go
+rc <- new("QDNAseqReadCounts",bins=bins,counts=mat,phenodata=phenodata)
+# and now we let QDNAseq do its magic
+seg <- rctosegmented(rc, saveobject = FALSE)
+# That's it! Now we can start doing ACE stuff
+sqm <- squaremodel(seg, 1, prows = 150, ptop = 3.3, pbottom = 1.8, penalty = 0.5, penploidy = 0.5)
+# The plot looks like this
+sqm$matrixplot
+# it looks quite different, but that's all due to binsize!
+# specifically to create the figure, the following commands were used
+pdf("plots/matrixplot.pdf", height = 4, width=4)
+sqm$matrixplot + 
+  theme(legend.position='top', legend.title=element_blank(),
+        legend.text=element_blank(), axis.text = element_blank(),
+        axis.title = element_blank()) + 
+  ggtitle(label = "")
+dev.off()
+# text was removed to facilitate figure editing in Adobe Illustrator
+```
+
+Figure 1B
+
+```{r Figure 1B}
+model <- singlemodel(seg, 1)
+model$errorplot
+pdf("plots/errorplot.pdf", height = 4, width=4)
+model$errorplot + 
+  theme(text = element_blank())
+dev.off()
+# Again text was removed to facilitate figure editing in Adobe Illustrator
+```
+
+Figure 1C
+
+```{r Figure 1C}
+bestfit <- model$minima[order(model$rerror, -model$minima)][1]
+singleplot(seg, 1, cellularity = bestfit)
+plot <- singleplot(seg, 1, cellularity = bestfit, chrsubset = 1:22)
+pdf("plots/cnp.pdf", height = 4, width = 6)
+plot + theme(text = element_blank())
+dev.off()
+```
+
+The cellularity will probably be a bit lower than in the published figure due to the larger bin size. Figure 1 was assembled in Adobe Illustrator, and text was added as appropriate. Unfortunately it is not so easy to adjust labels of axes afterwards, but it is quite easy to remove them as shown. As far as I know, ggplot2 does not have a good way to prevent overlap of break labels.
+
+
+
+## Figure 2
+
+Figure 2 is the figure with ovarian carcinoma data. Unfortunately the QDNAseq-objects are too large to share. Instead I will share the phenodata from the object and the results of ACE and ABSOLUTE. This is how the results were obtained:
+
+```{r, eval = FALSE}
+segrel <- readRDS("OVCAR_rel.rds")
+OVCAR <- pData(readRDS("OVCAR_abs.rds"))[,c(1,3,4,7,8,9,10,12)]
+# ACE using squaremodel fitting:
+Sample <- c()
+Rank <- c()
+Cellularity <- c()
+Ploidy <- c()
+for (s in seq_along(sampleNames(segrel))) {
+    minimadf <- squaremodel(segrel, s, ptop = 4.3, pbottom = 1.8, prows = 250, penalty = 0.5, penploidy = 0.5)$minimadf
+    for (i in seq_len(min(length(minimadf$minimum), 20))) {
+        Sample <- append(Sample, sampleNames(segrel)[s])
+        Rank <- append(Rank, i)
+        Cellularity <- append(Cellularity, minimadf$cellularity[i])
+        Ploidy <- append(Ploidy, minimadf$ploidy[i])
+    }
+}
+sqmfits <- data.frame(Sample, Rank, Cellularity, Ploidy)
+write.table(smb, "sqmfits.tsv", row.names = FALSE, sep = "\t", quote = FALSE)
+ACE_sqm <- sqmfits[sqmfits$Rank==1,]
+# ACE using singlemodel fitting
+Sample <- c()
+Cellularity <- c()
+Penalty <- c()
+Method <- c()
+for (penx in c(0, 0.2, 0.5)) {
+    for (m in c("RMSE", "MAE")) {
+        for (s in seq_along(sampleNames(segrel))) {
+            Sample <- append(Sample, sampleNames(segrel)[s])
+            sm <- sm2(segrel, s, method = m, penalty = penx)
+            cell <- sm$minima[tail(which(sm$rerror==min(sm$rerror)),1)]
+            Cellularity <- append(Cellularity,cell)
+            Method <- append(Method, m)
+            Penalty <- append(Penalty, penx)
+        }
+    }
+}
+smf <- data.frame(Sample, Cellularity, Penalty, Method)
+write.table (simple, paste0("singlemodelfits.tsv"), row.names = FALSE, sep = "\t", quote = FALSE)
+# after inspection, using penalty = 0.5 and method = "RMSE" seems optimal
+ACE_smf <- smf[smf$Method=="RMSE" & smf$Penalty==0.5, ]
+
+# And for ABSOLUTE...
+Sample <- sampleNames(segrel) # sampleNames are all the same
+n <- length(Sample)
+Cellularity <- rep(1,n)
+Ploidy <- rep(2,n)
+models <- data.frame(Sample, Cellularity, Ploidy)
+pal <- postanalysisloop(segrel, models, printsegmentfiles = TRUE, printnewplots = FALSE, log = TRUE)
+rm(pal)
+# I have tried several parameters, these gave the best results
+sigma.p <- 0
+max.sigma.h <- 0.015
+min.ploidy <- 0.95
+max.ploidy <- 5
+max.as.seg.count <- 1500
+max.non.clonal <- 0.95
+max.neg.genome <- 0.05
+results.dir <- "./ABSOLUTE"
+dir.create(results.dir)
+returnlog <- c()
+for (i in list.files("segmentfiles/")) {
+    sample.name <- substr(i,0,nchar(i)-13)
+    returnlog <- append(returnlog, try(RunAbsolute(seg.dat.fn=file.path("segmentfiles", i), 
+                                                   sigma.p, max.sigma.h, min.ploidy, max.ploidy, 
+                                                   primary.disease="Ovarian Cancer", platform="SNP_6.0", sample.name=sample.name, results.dir, 
+                                                   max.as.seg.count, max.non.clonal, max.neg.genome, copy_num_type="total", 
+                                                   maf.fn=NULL, min.mut.af=0.02, output.fn.base=NULL, verbose=TRUE)))
+}
+indv.results.dir <- paste0(results.dir,"/indvresults")
+dir.create(indv.results.dir)
+CreateReviewObject("OVCAR",file.path(results.dir, list.files(results.dir, pattern = "\\.RData$")),indv.results.dir, 
+                   copy_num_type="total",plot.modes=FALSE)
+ExtractReviewedResults(paste0(indv.results.dir,"/OVCAR.PP-calls_tab.txt"), "Jos", 
+                       paste0(indv.results.dir,"/OVCAR.PP-modes.data.RData"),
+                       out.dir.base=results.dir,obj.name = "Results", copy_num_type="total")
+load("ABSOLUTE/indvresults/OVCAR.PP-modes.data.RData")
+Sample <- c()
+Rank <- c()
+Cellularity <- c()
+Ploidy <- c()
+round_ploidy <- c()
+for (m in segobj.list) {
+    for (i in seq_len(min(length(m$mode.res$mode.tab[,1]), 20))) {
+        Sample <- append(Sample, m$sample.name)
+        Rank <- append(Rank, i)
+        Cellularity <- append(Cellularity, m$mode.res$mode.tab[i,1])
+        Ploidy <- append(Ploidy, m$mode.res$mode.tab[i,2])
+        round_ploidy <- append(round_ploidy, round(m$mode.res$mode.tab[i,2]))
+    }
+}
+ABSO <- data.frame(Sample, Rank, Cellularity, Ploidy, round_ploidy)
+write.table(ABSO, "OVCAR_ABSOLUTE.tsv", row.names = FALSE, sep = "\t", quote = FALSE)
+rm(segobj.list)
+# ABS <- read.delim("ABSOLUTE.tsv")
+ABSOLUTE <- ABSO[ABSO$Rank==1,]
+
+# add the data to OVCAR
+OVCAR <- OVCAR[order(OVCAR$name), ]
+OVCAR$ACE_sqm <- ACE_sqm[order(ACE_sqm$Sample),]$Cellularity
+OVCAR$ACE_smf <- ACE_smf[order(ACE_smf$Sample),]$Cellularity
+OVCAR$ABSOLUTE <- ABSOLUTE[order(ABSOLUTE$Sample),]$Cellularity
+```
+
+```{r accuracy}
+# some interesting statistics...
+# median absolute difference between gold standard and ACE
+median(abs(OVCAR$purity-OVCAR$ACE_sqm))
+# median absolute difference between gold standard and ABSOLUTE
+median(abs(OVCAR$purity-OVCAR$ABSOLUTE))
+# median fold difference between gold standard and ACE
+median(exp(abs(log(OVCAR$purity/OVCAR$ACE_sqm))))
+# median fold difference between gold standard and ACE
+median(exp(abs(log(OVCAR$purity/OVCAR$ABSOLUTE))))
+```
+
+So now the OVCAR data frame has the best fits of ACE and ABSOLUTE. These were plotted as follows.
+Legends were added in Adobe Illustrator: ACE is green and ABSOLUTE is red.
+
+```{r Figure 2}
+ggplot(OVCAR) +
+    scale_y_continuous(name="Estimated tumor cell percentage", limits = c(0,105), expand = c(0,0)) +
+    scale_x_continuous(name="Tumor cell percentage gold standard", limits = c(0,105), expand = c(0,0)) +
+    geom_point(aes(x = 100*purity, y = 100*ACE_sqm), color = "darkgreen") + 
+    geom_smooth(aes(x = 100*purity, y = 100*ACE_sqm), method = "lm", color = "darkgreen") +
+    geom_point(aes(x = 100*purity, y = 100*ABSOLUTE), color = "red") + 
+    geom_smooth(aes(x = 100*purity, y = 100*ABSOLUTE), method = "lm", color = "red") +
+    geom_abline(slope = 1) +
+    theme_classic() + theme(
+        axis.line = element_line(color='black'), 
+        axis.ticks = element_line(color='black'), 
+        axis.text = element_text(color='black'))
+```
+
+For the coherence of the code, I will now also present Supplementary figure 4!
+
+```{r Supplementary Figure 4}
+ggplot(OVCAR) +
+    scale_y_continuous(name="Estimated tumor cell percentage", limits = c(0,105), expand = c(0,0)) +
+    scale_x_continuous(name="Tumor cell percentage gold standard", limits = c(0,105), expand = c(0,0)) +
+    geom_point(aes(x = 100*purity, y = 100*ACE_sqm), color = "darkgreen") + 
+    geom_smooth(aes(x = 100*purity, y = 100*ACE_sqm), method = "lm", color = "darkgreen") +
+    geom_point(aes(x = 100*purity, y = 100*ACE_smf), color = "purple3") + 
+    geom_smooth(aes(x = 100*purity, y = 100*ACE_smf), method = "lm", color = "purple3") +
+    geom_abline(slope = 1) +
+    theme_classic() + theme(
+        axis.line = element_line(color='black'), 
+        axis.ticks = element_line(color='black'), 
+        axis.text = element_text(color='black'))
+```
+
+## Rank analysis
+
+Only looking at the top prediction might be too polarizing: what if one of the methods always gets it right, say, in its top three of predictions?
+
+```{r Rank analysis}
+# we are going back to the sqmfits and ABS data frames
+truth <- c()
+for (s in seq_len(nrow(sqmfits))) {
+  truth <- append(truth, OVCAR$purity[OVCAR$name==sqmfits$Sample[s]])
+}
+sqmfits$truth <- truth
+truth <- c()
+for (s in seq_len(nrow(ABSO))) {
+  truth <- append(truth, OVCAR$purity[OVCAR$name==ABSO$Sample[s]])
+}
+ABSO$truth <- truth
+rm(truth)
+
+sqmfits$absdiff <- abs(sqmfits$Cellularity-sqmfits$truth)
+sqmfits$folddiff <- exp(abs(log(sqmfits$Cellularity/sqmfits$truth)))
+ABSO$absdiff <- abs(ABSO$Cellularity-ABSO$truth)
+ABSO$folddiff <- exp(abs(log(ABSO$Cellularity/ABSO$truth)))
+cutoffabs <- c(0.05, 0.1, 0.15, 0.2)
+cutofffold <- c(1.1, 1.15, 1.2, 1.25)
+rmACEabs <- matrix(nrow = nrow(OVCAR), ncol = length(cutoffabs))
+rmABSabs <- matrix(nrow = nrow(OVCAR), ncol = length(cutoffabs))
+rmACEfold <- matrix(nrow = nrow(OVCAR), ncol = length(cutofffold))
+rmABSfold <- matrix(nrow = nrow(OVCAR), ncol = length(cutofffold))
+for (s in seq_len(nrow(OVCAR))) {
+  subace <- sqmfits[sqmfits$Sample==OVCAR$name[s], ]
+  subABS <- ABSO[ABSO$Sample==OVCAR$name[s], ]
+  for (coa in seq_along(cutoffabs)) {
+    if(any(subace$absdiff < cutoffabs[coa])) {
+      rmACEabs[s, coa] <- min(subace$Rank[subace$absdiff < cutoffabs[coa]])
+    } else {rmACEabs[s, coa] <- 0}
+    if(any(subABS$absdiff < cutoffabs[coa])) {
+      rmABSabs[s, coa] <- min(subABS$Rank[subABS$absdiff < cutoffabs[coa]])
+    } else {rmABSabs[s, coa] <- 0}
+  }
+  for (cof in seq_along(cutofffold)) {
+    if(any(subace$folddiff < cutofffold[cof])) {
+      rmACEfold[s, cof] <- min(subace$Rank[subace$folddiff < cutofffold[cof]])
+    } else {rmACEfold[s, cof] <- 0}
+    if(any(subABS$folddiff < cutofffold[cof])) {
+      rmABSfold[s, cof] <- min(subABS$Rank[subABS$folddiff < cutofffold[cof]])
+    } else {rmABSfold[s, cof] <- 0}
+  }
+}
+absdf <- data.frame(Sample = rep(OVCAR$name, 8))
+absdf$rankwithincutoff <- c(as.vector(rmACEabs), as.vector(rmABSabs))
+absdf$cutoff <- as.factor(rep(cutoffabs, each = nrow(OVCAR), 2))
+absdf$method <- as.factor(rep(c("ACE", "ABS"), each = nrow(OVCAR)*length(cutoffabs)))
+
+folddf <- data.frame(Sample = rep(OVCAR$name, 8))
+folddf$rankwithincutoff <- c(as.vector(rmACEfold), as.vector(rmABSfold))
+folddf$cutoff <- as.factor(rep(cutofffold, each = nrow(OVCAR), 2))
+folddf$method <- as.factor(rep(c("ACE", "ABS"), each = nrow(OVCAR)*length(cutofffold)))
+```
+
+```{r Supplementary Figure 5}
+absdfalt <- absdf
+absdfalt$rankwithincutoff[absdfalt$rankwithincutoff>12] <- 13
+absdfalt$rankwithincutoff[absdfalt$rankwithincutoff==0] <- 14
+csa <- c()
+for (m in levels(absdfalt$method)) {
+  for (c in levels(absdfalt$cutoff)) {
+    for (i in 1:14) {
+      csa <- append(csa, sum(absdfalt$rankwithincutoff[absdfalt$method == m & absdfalt$cutoff == c] <= i))
+    }
+  }
+}
+cumdfabs <- data.frame(cum = csa, method = rep(c("ABS","ACE"), each = 56), 
+                       cutoff = rep(cutoffabs, each = 14), rank = rep(1:14, 8))
+
+# instead of plotting all possibities, we restrict it a little
+ggplot() + 
+    scale_x_continuous(breaks = 1:14, labels = c(1:12, ">12", "none"), name = "number of fits") +
+    scale_y_continuous(breaks = c(0,50,100,150,200,250), limits = c(0,255), expand = c(0,0), name = "correctly fitted samples", sec.axis = sec_axis(~./2.53, name = "percentage of samples")) +
+    geom_bar(data=absdfalt[absdfalt$cutoff == 0.05, ], aes(x=rankwithincutoff, fill = method), position = position_dodge(preserve = "single")) + 
+    scale_fill_manual(values = c("red", "darkgreen")) +
+    geom_line(data=cumdfabs[cumdfabs$cutoff == 0.05, ], aes(x=rank, y=cum, color = method)) +
+    scale_color_manual(values = c("red", "darkgreen")) +
+    theme_classic() + theme(
+        axis.line = element_line(color='black'), 
+        axis.ticks = element_line(color='black'), 
+        axis.text = element_text(color='black'))
+
+with(absdfalt[absdfalt$cutoff == 0.05, ], list(ACE_better = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]<0),
+     tied = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]==0),
+     ABS_better = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]>0)))
+
+ggplot() + 
+    scale_x_continuous(breaks = 1:14, labels = c(1:12, ">12", "none"), name = "number of fits") +
+    scale_y_continuous(breaks = c(0,50,100,150,200,250), limits = c(0,255), expand = c(0,0), name = "correctly fitted samples", sec.axis = sec_axis(~./2.53, name = "percentage of samples")) +
+    geom_bar(data=absdfalt[absdfalt$cutoff == 0.1, ], aes(x=rankwithincutoff, fill = method), position = position_dodge(preserve = "single")) + 
+    scale_fill_manual(values = c("red", "darkgreen")) +
+    geom_line(data=cumdfabs[cumdfabs$cutoff == 0.1, ], aes(x=rank, y=cum, color = method)) +
+    scale_color_manual(values = c("red", "darkgreen")) +
+    theme_classic() + theme(
+        axis.line = element_line(color='black'), 
+        axis.ticks = element_line(color='black'), 
+        axis.text = element_text(color='black'))
+
+with(absdfalt[absdfalt$cutoff == 0.1, ], list(ACE_better = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]<0),
+     tied = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]==0),
+     ABS_better = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]>0)))
+
+
+folddfalt <- folddf
+folddfalt$rankwithincutoff[folddfalt$rankwithincutoff>12] <- 13.5
+folddfalt$rankwithincutoff[folddfalt$rankwithincutoff==0] <- 15
+
+csf <- c()
+for (m in levels(folddfalt$method)) {
+  for (c in levels(folddfalt$cutoff)) {
+    for (i in 1:14) {
+      csf <- append(csf, sum(folddfalt$rankwithincutoff[folddfalt$method == m & folddfalt$cutoff == c] <= i))
+    }
+  }
+}
+cumdffold <- data.frame(cum = csf, method = rep(c("ABS","ACE"), each = 56), 
+                       cutoff = rep(cutofffold, each = 14), rank = rep(1:14, 8))
+# instead of plotting all possibities, we restrict it a little
+ggplot() + 
+    scale_x_continuous(breaks = 1:14, labels = c(1:12, ">12", "none"), name = "number of fits") +
+    scale_y_continuous(breaks = c(0,50,100,150,200,250), limits = c(0,255), expand = c(0,0), name = "correctly fitted samples", sec.axis = sec_axis(~./2.53, name = "percentage of samples")) +
+    geom_bar(data=folddfalt[folddfalt$cutoff == 1.1, ], aes(x=rankwithincutoff, fill = method), position = position_dodge(preserve = "single")) + 
+    scale_fill_manual(values = c("red", "darkgreen")) +
+    geom_line(data=cumdffold[cumdffold$cutoff == 1.1, ], aes(x=rank, y=cum, color = method)) +
+    scale_color_manual(values = c("red", "darkgreen")) +
+    theme_classic() + theme(
+        axis.line = element_line(color='black'), 
+        axis.ticks = element_line(color='black'), 
+        axis.text = element_text(color='black'))
+
+with(folddfalt[folddfalt$cutoff == 1.1, ], list(ACE_better = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]<0),
+     tied = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]==0),
+     ABS_better = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]>0)))
+
+ggplot() + 
+    scale_x_continuous(breaks = 1:14, labels = c(1:12, ">12", "none"), name = "number of fits") +
+    scale_y_continuous(breaks = c(0,50,100,150,200,250), limits = c(0,255), expand = c(0,0), name = "correctly fitted samples", sec.axis = sec_axis(~./2.53, name = "percentage of samples")) +
+    geom_bar(data=folddfalt[folddfalt$cutoff == 1.25, ], aes(x=rankwithincutoff, fill = method), position = position_dodge(preserve = "single")) + 
+    scale_fill_manual(values = c("red", "darkgreen")) +
+    geom_line(data=cumdffold[cumdffold$cutoff == 1.25, ], aes(x=rank, y=cum, color = method)) +
+    scale_color_manual(values = c("red", "darkgreen")) +
+    theme_classic() + theme(
+        axis.line = element_line(color='black'), 
+        axis.ticks = element_line(color='black'), 
+        axis.text = element_text(color='black'))
+
+with(folddfalt[folddfalt$cutoff == 1.25, ], list(ACE_better = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]<0),
+     tied = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]==0),
+     ABS_better = sum(rankwithincutoff[1:253]-rankwithincutoff[254:506]>0)))
+```
+
+## Benchmarking with ABSOLUTE and ichorCNA
+
+For benchmarking, a large set of permutations were created as follows:
+
+```{r permutations}
+# This chunk and the later bootstrapping of ACE has been giving this markdown
+# file a lot of trouble. I therefore reduced the amount of reads to 2 million
+# instead of 10, and the number of repeats to 2 instead of 10! If you are really
+# interested in reproducing the data, then change these variables back to 10!
+# But I would suggest not to run the code in a markdown document.
+Mreads <- 2
+repeats <- 2
+tumor <- as.vector(assayData(data_readcounts)$counts[,2])
+normal <- as.vector(assayData(data_readcounts)$counts[,1])
+matSCC <- admix(tumor, normal, tdp = 0:100, Mreads = Mreads, repeats = repeats)
+bins <- QDNAseq::getBinAnnotations(binSize = 1000, genome = "hg19")
+rownames(matSCC) <- rownames(bins)
+phenodata = data.frame(name=colnames(matSCC),row.names = colnames(matSCC))
+rcSCC <- new("QDNAseqReadCounts",bins=bins,counts=matSCC,phenodata=phenodata)
+rm(matSCC)
+
+# ... and then for the other three cell lines
+tumor <- as.vector(assayData(data_readcounts)$counts[,3])
+matHCT <- admix(tumor, normal, tdp = 0:100, Mreads = Mreads, repeats = repeats)
+rownames(matHCT) <- rownames(bins)
+phenodata = data.frame(name=colnames(matHCT),row.names = colnames(matHCT))
+rcHCT <- new("QDNAseqReadCounts",bins=bins,counts=matHCT,phenodata=phenodata)
+rm(matHCT)
+
+tumor <- as.vector(assayData(data_readcounts)$counts[,4])
+matHT <- admix(tumor, normal, tdp = 0:100, Mreads = Mreads, repeats = repeats)
+rownames(matHT) <- rownames(bins)
+phenodata = data.frame(name=colnames(matHT),row.names = colnames(matHT))
+rcHT <- new("QDNAseqReadCounts",bins=bins,counts=matHT,phenodata=phenodata)
+rm(matHT)
+
+tumor <- as.vector(assayData(data_readcounts)$counts[,5])
+matMO <- admix(tumor, normal, tdp = 0:100, Mreads = Mreads, repeats = repeats)
+rownames(matMO) <- rownames(bins)
+phenodata = data.frame(name=colnames(matMO),row.names = colnames(matMO))
+rcMO <- new("QDNAseqReadCounts",bins=bins,counts=matMO,phenodata=phenodata)
+rm(matMO)
+
+# you might want to save these objects
+dir.create("rc")
+saveRDS(rcSCC, "rc/rcSCC.rds")
+saveRDS(rcHCT, "rc/rcHCT.rds")
+saveRDS(rcHT, "rc/rcHT.rds")
+saveRDS(rcMO, "rc/rcMO.rds")
+```
+
+ichorCNA works directly with the readcounts, but you need to convert to WIG-format. I will exemplify for one cell line.
+
+```{r wig}
+dir.create("wig")
+
+# UM-SCC-22A
+dirout <- "wig/SCC"
+dir.create(dirout)
+ad <- assayData(rcSCC)
+fd <- fData(rcSCC)
+rlechr <- rle(fd$chromosome)
+for (s in seq_along(sampleNames(rcSCC))) {
+  filename <- file.path(dirout,paste0(sampleNames(rcSCC)[s], ".wig"))
+  wig <- c()
+  bincounter <- 1
+  for (c in seq_along(rlechr$values)) {
+    wig <- append(wig, paste0("fixedStep chrom=", rlechr$values[c], " start=1 step=1000000 span=1000000"))
+    wig <- append(wig, as.vector(ad$counts[seq(bincounter, bincounter+rlechr$lengths[c]-1), s]))
+    bincounter <- bincounter + rlechr$lengths[c]
+  }
+  write.table(wig, filename, row.names = FALSE, col.names = FALSE, quote=FALSE)
+}
+
+```
+
+The following code was executed with bash in the command line prompt.
+Make sure the ichorCNA package is in the correct directory and installed (including dependencies) in R
+The example below uses the git repository. Again only a single cell line example:
+
+<!-- git clone https://github.com/broadinstitute/ichorCNA.git -->
+<!-- R CMD INSTALL ichorCNA -->
+<!-- mkdir ichor -->
+<!-- for i in wig/SCC/* -->
+<!--   do -->
+<!--   bn=`basename $i` -->
+<!--   fn=${bn/.wig/} -->
+<!--   Rscript ./ichorCNA/scripts/runIchorCNA.R \ -->
+<!--     --WIG $i \ -->
+<!--     --gcWig ./ichorCNA/inst/extdata/gc_hg19_1000kb.wig \ -->
+<!--     --mapWig ./ichorCNA/inst/extdata/map_hg19_1000kb.wig \ -->
+<!--     --id $fn \ -->
+<!--     --outDir ichor/SCC/ -->
+<!--   params=ichor/SCC/$fn".params.txt" -->
+<!--   head -2 $params | tail -1 >> ichor/SCC_summary.tsv -->
+<!-- done -->
+
+The "purity" (cellularity) and ploidy of the best fit of each permutation is saved to the summary files. This can then be loaded into R and molded into the right data frame form for later...
+
+```{r, eval = FALSE}
+ichorSCC <- read.table("ichor/SCC_summary.tsv", header = FALSE, sep = "\t")
+colnames(ichorSCC) <- c("Sample", "Cellularity", "Ploidy")
+# ichorSCC$Rank <- 1
+# ichorSCC <- ichorSCC[,c(1,4,2,3)]
+ichorSCC$rep <- as.numeric(gsub(".*_", "", x = ichorSCC$Sample))
+temp <- gsub("TvN_","", ichorSCC$Sample)
+ichorSCC$realtdp <- as.numeric(gsub("_.*","", temp))
+ichorSCC$exptcp <- ichorSCC$realtdp
+SCCsegmented <- assayData(data_segmented)$segmented[,2]
+SCC <- 2 * mean(SCCsegmented, na.rm = TRUE) / median(SCCsegmented, na.rm = TRUE)
+# below code is done to prevent divide-by-zero ... should not be necessary in R, but still
+ichorSCC$exptcp[ichorSCC$realtdp!=0] <- 200 / (2 + SCC*(100/(ichorSCC$realtdp[ichorSCC$realtdp!=0]) - 1))
+ichorSCC$Line <- "UM-SCC-22A"
+ichorSCC$Method <- "ichor"
+
+ichorHCT <- read.table("ichor/HCT116_summary.tsv", header = FALSE, sep = "\t")
+colnames(ichorHCT) <- c("Sample", "Cellularity", "Ploidy")
+# ichorHCT$Rank <- 1
+# ichorHCT <- ichorHCT[,c(1,4,2,3)]
+ichorHCT$rep <- as.numeric(gsub(".*_", "", x = ichorHCT$Sample))
+temp <- gsub("TvN_","", ichorHCT$Sample)
+ichorHCT$realtdp <- as.numeric(gsub("_.*","", temp))
+ichorHCT$exptcp <- ichorHCT$realtdp
+HCTsegmented <- assayData(data_segmented)$segmented[,3]
+HCT <- 2 * mean(HCTsegmented, na.rm = TRUE) / median(HCTsegmented, na.rm = TRUE)
+ichorHCT$exptcp[ichorHCT$realtdp!=0] <- 200 / (2 + HCT*(100/(ichorHCT$realtdp[ichorHCT$realtdp!=0]) - 1))
+ichorHCT$Line <- "HCT116"
+ichorHCT$Method <- "ichor"
+
+# HT29
+ichorHT <- read.table("ichor/HT29_summary.tsv", header = FALSE, sep = "\t")
+colnames(ichorHT) <- c("Sample", "Cellularity", "Ploidy")
+# ichorHT$Rank <- 1
+# ichorHT <- ichorHT[,c(1,4,2,3)]
+ichorHT$rep <- as.numeric(gsub(".*_", "", x = ichorHT$Sample))
+temp <- gsub("TvN_","", ichorHT$Sample)
+ichorHT$realtdp <- as.numeric(gsub("_.*","", temp))
+ichorHT$exptcp <- ichorHT$realtdp
+HTsegmented <- assayData(data_segmented)$segmented[,4]
+HT <- 3 * mean(HTsegmented, na.rm = TRUE) / median(HTsegmented, na.rm = TRUE)
+ichorHT$exptcp[ichorHT$realtdp!=0] <- 200 / (2 + HT*(100/(ichorHT$realtdp[ichorHT$realtdp!=0]) - 1))
+ichorHT$Line <- "HT29"
+ichorHT$Method <- "ichor"
+
+# MOLT-4
+ichorMO <- read.table("ichor/MOLT-4_summary.tsv", header = FALSE, sep = "\t")
+colnames(ichorMO) <- c("Sample", "Cellularity", "Ploidy")
+# ichorMO$Rank <- 1
+# ichorMO <- ichorMO[,c(1,4,2,3)]
+ichorMO$rep <- as.numeric(gsub(".*_", "", x = ichorMO$Sample))
+temp <- gsub("TvN_","", ichorMO$Sample)
+ichorMO$realtdp <- as.numeric(gsub("_.*","", temp))
+ichorMO$exptcp <- ichorMO$realtdp
+MOsegmented <- assayData(data_segmented)$segmented[,5]
+MO <- 4 * mean(MOsegmented, na.rm = TRUE) / median(MOsegmented, na.rm = TRUE)
+ichorMO$exptcp[ichorMO$realtdp!=0] <- 200 / (2 + MO*(100/(ichorMO$realtdp[ichorMO$realtdp!=0]) - 1))
+ichorMO$Line <- "MOLT-4"
+ichorMO$Method <- "ichor"
+
+ichor <- rbind(ichorSCC,ichorHCT,ichorMO)
+write.table(ichor, "ichor.tsv", row.names = FALSE, quote = FALSE, sep = "\t")
+```
+
+That's all the results for ichorCNA! For ABSOLUTE and ACE, we need to first continue with the QDNAseq pipeline:
+
+```{r get segmented}
+# This will take a few minutes. For the smaller bin sizes, it will take a lot longer!
+dir.create("seg")
+segSCC <- rctosegmented(rcSCC, saveobject = TRUE, filename = "seg/segSCC.rds")
+segHCT <- rctosegmented(rcHCT, saveobject = TRUE, filename = "seg/segHCT.rds")
+segHT <- rctosegmented(rcHT, saveobject = TRUE, filename = "seg/segHT.rds")
+segMO <- rctosegmented(rcMO, saveobject = TRUE, filename = "seg/segMO.rds")
+```
+
+ABSOLUTE takes its segmented data in a HAPSEG format. ACE has a way to produce this quickly:
+
+```{r make segmentfiles}
+# This, again, is a big one.
+# Note that the sample names (TvN_<realtdp>_<rep>) are the same for the cell lines
+Sample <- sampleNames(segSCC)
+n <- length(Sample)
+Cellularity <- rep(1,n)
+Ploidy <- rep(2,n)
+Standard <- rep(1,n)
+models <- data.frame(Sample, Cellularity, Ploidy, Standard)
+loop1 <- postanalysisloop(segSCC, models, printsegmentfiles = TRUE, printnewplots = FALSE, outputdir = "segmentsSCC", log = TRUE)
+loop2 <- postanalysisloop(segHCT, models, printsegmentfiles = TRUE, printnewplots = FALSE, outputdir = "segmentsHCT116", log = TRUE)
+loop3 <- postanalysisloop(segHT, models, printsegmentfiles = TRUE, printnewplots = FALSE, outputdir = "segmentsHT29", log = TRUE)
+loop4 <- postanalysisloop(segMO, models, printsegmentfiles = TRUE, printnewplots = FALSE, outputdir = "segmentsMO", log = TRUE)
+```
+
+The rest of the ABSOLUTE bootstrapping is a bit more involving. I also have to note that for two samples ABSOLUTE produced an error, and I had to skip the samples! I made new samples for these repetitions ... no idea why in these particular cases ABSOLUTE couldn't manage. To prevent an error from breaking the loop I put the RunAbsolute call within the try function. 
+
+```{r, eval = FALSE}
+sigma.p <- 0
+max.sigma.h <- 0.015
+min.ploidy <- 0.95
+max.ploidy <- 10
+max.as.seg.count <- 1500
+max.non.clonal <- 0.5
+max.neg.genome <- 0.05
+dir.create("ABSOLUTE")
+returnlog <- c()
+
+results.dir <- "./ABSOLUTE/SCC"
+dir.create(results.dir)
+for (i in list.files("segmentsSCC/segmentfiles/")) {
+  sample.name <- substr(i,0,nchar(i)-13)
+  returnlog <- append(returnlog, try(RunAbsolute(seg.dat.fn=file.path("segmentsSCC/segmentfiles", i), 
+                                                 sigma.p, max.sigma.h, min.ploidy, max.ploidy, 
+              primary.disease="Head and Neck Cancer", platform="SNP_6.0", sample.name=sample.name, results.dir, 
+              max.as.seg.count, max.non.clonal, max.neg.genome, copy_num_type="total", 
+              maf.fn=NULL, min.mut.af=0.02, output.fn.base=NULL, verbose=TRUE)))
+}
+
+indv.results.dir <- paste0(results.dir,"/indvresults")
+dir.create(indv.results.dir)
+
+CreateReviewObject("SCC",file.path(results.dir, list.files(results.dir, pattern = "\\.RData$")),indv.results.dir, 
+                   copy_num_type="total",plot.modes=FALSE)
+
+ExtractReviewedResults(paste0(indv.results.dir,"/SCC.PP-calls_tab.txt"), "Jos", 
+                       paste0(indv.results.dir,"/SCC.PP-modes.data.RData"),
+                       out.dir.base=results.dir,obj.name = "Results", copy_num_type="total")
+load("ABSOLUTE/SCC/indvresults/SCC.PP-modes.data.RData")
+Sample <- c()
+Rank <- c()
+Cellularity <- c()
+Ploidy <- c()
+round_ploidy <- c()
+for (m in segobj.list) {
+  for (i in seq_len(min(length(m$mode.res$mode.tab[,1]), 12))) {
+    Sample <- append(Sample, m$sample.name)
+    Rank <- append(Rank, i)
+    Cellularity <- append(Cellularity, m$mode.res$mode.tab[i,1])
+    Ploidy <- append(Ploidy, m$mode.res$mode.tab[i,2])
+    round_ploidy <- append(round_ploidy, round(m$mode.res$mode.tab[i,2]))
+  }
+}
+absSCC <- data.frame(Sample, Rank, Cellularity, Ploidy, round_ploidy)
+write.table(absSCC, "ABSOLUTE/absSCC.tsv", row.names = FALSE, sep = "\t", quote = FALSE)
+rm(segobj.list)
+
+# for HCT116
+results.dir <- "./ABSOLUTE/HCT116"
+dir.create(results.dir)
+for (i in list.files("segmentsHCT116/segmentfiles/")) {
+  sample.name <- substr(i,0,nchar(i)-13)
+  returnlog <- append(returnlog, try(RunAbsolute(seg.dat.fn=file.path("segmentsHCT116/segmentfiles", i), 
+                                                 sigma.p, max.sigma.h, min.ploidy, max.ploidy, 
+              primary.disease="Colorectal", platform="SNP_6.0", sample.name=sample.name, results.dir, 
+              max.as.seg.count, max.non.clonal, max.neg.genome, copy_num_type="total", 
+              maf.fn=NULL, min.mut.af=0.02, output.fn.base=NULL, verbose=TRUE)))
+}
+
+indv.results.dir <- paste0(results.dir,"/indvresults")
+dir.create(indv.results.dir)
+
+CreateReviewObject("HCT116",file.path(results.dir, list.files(results.dir, pattern = "\\.RData$")),indv.results.dir, 
+                   copy_num_type="total",plot.modes=FALSE)
+
+ExtractReviewedResults(paste0(indv.results.dir,"/HCT116.PP-calls_tab.txt"), "Jos", 
+                       paste0(indv.results.dir,"/HCT116.PP-modes.data.RData"),
+                       out.dir.base=results.dir,obj.name = "Results", copy_num_type="total")
+load("ABSOLUTE/HCT116/indvresults/HCT116.PP-modes.data.RData")
+Sample <- c()
+Rank <- c()
+Cellularity <- c()
+Ploidy <- c()
+round_ploidy <- c()
+for (m in segobj.list) {
+  for (i in seq_len(min(length(m$mode.res$mode.tab[,1]), 12))) {
+    Sample <- append(Sample, m$sample.name)
+    Rank <- append(Rank, i)
+    Cellularity <- append(Cellularity, m$mode.res$mode.tab[i,1])
+    Ploidy <- append(Ploidy, m$mode.res$mode.tab[i,2])
+    round_ploidy <- append(round_ploidy, round(m$mode.res$mode.tab[i,2]))
+  }
+}
+absHCT <- data.frame(Sample, Rank, Cellularity, Ploidy, round_ploidy)
+write.table(absHCT, "ABSOLUTE/absHCT116.tsv", row.names = FALSE, sep = "\t", quote = FALSE)
+rm(segobj.list)
+
+# for MOLT-4
+results.dir <- "./ABSOLUTE/MO"
+dir.create(results.dir)
+for (i in list.files("segmentsMO/segmentfiles/")) {
+  sample.name <- substr(i,0,nchar(i)-13)
+  returnlog <- append(returnlog, try(RunAbsolute(seg.dat.fn=file.path("segmentsMO/segmentfiles", i), 
+                                                 sigma.p, max.sigma.h, min.ploidy, max.ploidy, 
+              primary.disease="Colorectal", platform="SNP_6.0", sample.name=sample.name, results.dir, 
+              max.as.seg.count, max.non.clonal, max.neg.genome, copy_num_type="total", 
+              maf.fn=NULL, min.mut.af=0.02, output.fn.base=NULL, verbose=TRUE)))
+}
+
+indv.results.dir <- paste0(results.dir,"/indvresults")
+dir.create(indv.results.dir)
+
+CreateReviewObject("MOLT-4", file.path(results.dir, list.files(results.dir, pattern = "\\.RData$")),indv.results.dir, 
+                   copy_num_type="total",plot.modes=FALSE)
+
+ExtractReviewedResults(paste0(indv.results.dir,"/MOLT-4.PP-calls_tab.txt"), "Jos", 
+                       paste0(indv.results.dir,"/MOLT-4.PP-modes.data.RData"),
+                       out.dir.base=results.dir,obj.name = "Results", copy_num_type="total")
+load("ABSOLUTE/MO/indvresults/MOLT-4.PP-modes.data.RData")
+Sample <- c()
+Rank <- c()
+Cellularity <- c()
+Ploidy <- c()
+round_ploidy <- c()
+for (m in segobj.list) {
+  for (i in seq_len(min(length(m$mode.res$mode.tab[,1]), 12))) {
+    Sample <- append(Sample, m$sample.name)
+    Rank <- append(Rank, i)
+    Cellularity <- append(Cellularity, m$mode.res$mode.tab[i,1])
+    Ploidy <- append(Ploidy, m$mode.res$mode.tab[i,2])
+    round_ploidy <- append(round_ploidy, round(m$mode.res$mode.tab[i,2]))
+  }
+}
+absHT <- data.frame(Sample, Rank, Cellularity, Ploidy, round_ploidy)
+write.table(absHT, "ABSOLUTE/absMO.tsv", row.names = FALSE, sep = "\t", quote = FALSE)
+rm(segobj.list)
+
+# for HT29
+results.dir <- "./ABSOLUTE/HT29"
+dir.create(results.dir)
+for (i in list.files("segmentsHT29/segmentfiles/")) {
+  sample.name <- substr(i,0,nchar(i)-13)
+  returnlog <- append(returnlog, try(RunAbsolute(seg.dat.fn=file.path("segmentsHT29/segmentfiles", i), 
+                                                 sigma.p, max.sigma.h, min.ploidy, max.ploidy, 
+              primary.disease="Colorectal", platform="SNP_6.0", sample.name=sample.name, results.dir, 
+              max.as.seg.count, max.non.clonal, max.neg.genome, copy_num_type="total", 
+              maf.fn=NULL, min.mut.af=0.02, output.fn.base=NULL, verbose=TRUE)))
+}
+
+indv.results.dir <- paste0(results.dir,"/indvresults")
+dir.create(indv.results.dir)
+
+CreateReviewObject("HT29", file.path(results.dir, list.files(results.dir, pattern = "\\.RData$")),indv.results.dir, 
+                   copy_num_type="total",plot.modes=FALSE)
+
+ExtractReviewedResults(paste0(indv.results.dir,"/HT29.PP-calls_tab.txt"), "Jos", 
+                       paste0(indv.results.dir,"/HT29.PP-modes.data.RData"),
+                       out.dir.base=results.dir,obj.name = "Results", copy_num_type="total")
+load("ABSOLUTE/HT29/indvresults/HT29.PP-modes.data.RData")
+Sample <- c()
+Rank <- c()
+Cellularity <- c()
+Ploidy <- c()
+round_ploidy <- c()
+for (m in segobj.list) {
+  for (i in seq_len(min(length(m$mode.res$mode.tab[,1]), 12))) {
+    Sample <- append(Sample, m$sample.name)
+    Rank <- append(Rank, i)
+    Cellularity <- append(Cellularity, m$mode.res$mode.tab[i,1])
+    Ploidy <- append(Ploidy, m$mode.res$mode.tab[i,2])
+    round_ploidy <- append(round_ploidy, round(m$mode.res$mode.tab[i,2]))
+  }
+}
+absHT <- data.frame(Sample, Rank, Cellularity, Ploidy, round_ploidy)
+write.table(absHT, "ABSOLUTE/absHT29.tsv", row.names = FALSE, sep = "\t", quote = FALSE)
+rm(segobj.list)
+
+# We are only interested in the best fit of the correct ploidy
+# UM-SCC-22A
+absSCC$rep <- as.numeric(gsub(".*_", "", x = absSCC$Sample))
+temp <- gsub("TvN_", "", absSCC$Sample)
+absSCC$realtdp <- as.numeric(gsub("_.*", "", temp))
+absSCC <- absSCC[absSCC$round_ploidy==2,]
+absSCC <- absSCC[order(absSCC$realtdp, absSCC$rep, absSCC$Rank),]
+absSCC <- absSCC[!duplicated(absSCC$Sample),]
+absSCC$exptcp <- absSCC$realtdp
+absSCC$exptcp[absSCC$realtdp!=0] <- 200 / (2 + SCC*(100/(absSCC$realtdp[absSCC$realtdp!=0]) - 1))
+absSCC$Line <- "UM-SCC-22A"
+
+# HCT116
+absHCT$rep <- as.numeric(gsub(".*_", "", x = absHCT$Sample))
+temp <- gsub("TvN_", "", absHCT$Sample)
+absHCT$realtdp <- as.numeric(gsub("_.*", "", temp))
+absHCT <- absHCT[absHCT$round_ploidy==2,]
+absHCT <- absHCT[order(absHCT$realtdp, absHCT$rep, absHCT$Rank),]
+absHCT <- absHCT[!duplicated(absHCT$Sample),]
+absHCT$exptcp <- absHCT$realtdp
+absHCT$exptcp[absHCT$realtdp!=0] <- 200 / (2 + HCT*(100/(absHCT$realtdp[absHCT$realtdp!=0]) - 1))
+absHCT$Line <- "HCT116"
+# HT29
+absHT$rep <- as.numeric(gsub(".*_", "", x = absHT$Sample))
+temp <- gsub("TvN_", "", absHT$Sample)
+absHT$realtdp <- as.numeric(gsub("_.*", "", temp))
+# At lower cellularities, fits may not be present for round_ploidy == 3!
+# This means some rows are missing for HT29; I don't think it is a problem
+absHT <- absHT[absHT$round_ploidy==3,]
+absHT <- absHT[order(absHT$realtdp, absHT$rep, absHT$Rank),]
+absHT <- absHT[!duplicated(absHT$Sample),]
+absHT$exptcp <- absHT$realtdp
+absHT$exptcp[absHT$realtdp!=0] <- 200 / (2 + HT*(100/(absHT$realtdp[absHT$realtdp!=0]) - 1))
+absHT$Line <- "HT29"
+# MOLT-4
+absMO$rep <- as.numeric(gsub(".*_", "", x = absMO$Sample))
+temp <- gsub("TvN_", "", absMO$Sample)
+absMO$realtdp <- as.numeric(gsub("_.*", "", temp))
+absMO <- absMO[absMO$round_ploidy==4,]
+absMO <- absMO[order(absMO$realtdp, absMO$rep, absMO$Rank),]
+absMO <- absMO[!duplicated(absMO$Sample),]
+absMO$exptcp <- absMO$realtdp
+absMO$exptcp[absMO$realtdp!=0] <- 200 / (2 + MO*(100/(absMO$realtdp[absMO$realtdp!=0]) - 1))
+absMO$Line <- "MOLT-4"
+
+ABS <- rbind(absSCC, absHCT, absHT, absMO)
+ABS$Method <- "ABS"
+ABS <- ABS[, -c(2,5)]
+write.table(ABS, "ABS.tsv", row.names = FALSE, quote = FALSE, sep = "\t")
+```
+
+And last, but definitely not least, ACE! Because I was trying a lot of different parameters, I wrote the extractdata function to get the top predictions from the singlemodel call into a summary data frame. The function expects a certain order of the samples, of course matching the QDNAseq objects I have been creating. sm2 is a variant of singlemodel. It is different in that the user can specify which cellularities to test.
+
+```{r sm2 and extractdata functions}
+sm2 <- function(template,QDNAseqobjectsample = FALSE, ploidy = 2, 
+                cellularities = "linear", celllow = 0.05, cellhigh = 1, cellsteps = 95, 
+                standard, method = 'RMSE', exclude = c(), penalty = 0, highlightminima = TRUE) {
+  if(QDNAseqobjectsample) {template <- objectsampletotemplate(template, QDNAseqobjectsample)}
+  template <- template[!template$chr %in% exclude,]
+  segmentdata <- rle(as.vector(na.exclude(template$segments)))
+  if(missing(standard)) { standard <- median(rep(segmentdata$values,segmentdata$lengths)) }
+  if (class(cellularities) == "numeric" && length(cellularities) > 2) {
+    fraction <- sort(cellularities)
+    celllow <- fraction[1]
+    cellhigh <- tail(fraction,1)
+    cellsteps <- length(fraction)-1
+  } else if (cellularities == "linear") {
+    fraction <- seq(celllow, cellhigh, length.out = cellsteps+1)
+  } else if (cellularities %in% c("exponential", "exp", "log")) {
+    fraction <- celllow * (cellhigh/celllow)^((0:cellsteps)/cellsteps)
+  } else { 
+    stop("not a valid value for cellularities")
+  }
+  
+  expected <- c()
+  temp <- c()
+  errorlist <- c()
+  for (i in 1:length(fraction)) {
+    for (p in 1:12) {
+      expected[p] <- standard*(1+(p-ploidy)*fraction[i]/(fraction[i]*(ploidy-2)+2))
+    }
+    for (j in 1:length(segmentdata$values)) {
+      if(method=='RMSE') {temp[j] <- (min(abs(segmentdata$values[j]-expected),0.5)/(fraction[i]^penalty))^2}
+      else if(method=='SMRE') {temp[j] <- sqrt(min(abs(segmentdata$values[j]-expected),0.5)/(fraction[i]^penalty))}
+      else if(method=='MAE') {temp[j] <- min(abs(segmentdata$values[j]-expected),0.5)/(fraction[i]^penalty)}
+      else {print("Not a valid method")}
+    }
+    if(method=='RMSE') {errorlist[i] <- sqrt(sum(rep(temp,segmentdata$lengths))/sum(segmentdata$lengths))}
+    else if(method=='SMRE') {errorlist[i] <- sum(rep(temp,segmentdata$lengths))/sum(segmentdata$lengths)^2}
+    else if(method=='MAE') {errorlist[i] <- sum(rep(temp,segmentdata$lengths))/sum(segmentdata$lengths)}
+    
+  }
+  
+  minima <- c()
+  rerror <- c()
+  
+  if (round(errorlist[1], digits = 10) < round(errorlist[2], digits = 10)) {
+    lastminimum <- fraction[1]
+    minima[1] <- fraction[1]
+    rerror[1] <- errorlist[1]/max(errorlist)
+  }
+  for (l in 2:cellsteps) {
+    if (round(errorlist[l], digits = 10) < round(errorlist[l-1], digits = 10) & round(errorlist[l], digits = 10) < round(errorlist[l+1], digits =10)) { 
+      lastminimum <- fraction[l]
+      minima <- append(minima,fraction[l])
+      rerror <- append(rerror,(errorlist[l]/max(errorlist)))
+    }
+  }
+  if (errorlist[cellsteps+1] <= errorlist[cellsteps]) {
+    lastminimum <- fraction[cellsteps+1]
+    minima <- append(minima, fraction[cellsteps+1])
+    rerror <- append(rerror, errorlist[cellsteps+1]/max(errorlist))
+  }
+  cellularity <- 100*fraction
+  tempdf <- data.frame(cellularity,errorlist=errorlist/max(errorlist))
+  minimadf <- data.frame(minima=minima*100,rerror)
+  if(highlightminima==TRUE) {
+    tempplot <- ggplot2::ggplot() +
+      scale_y_continuous(name = "relative error", limits = c(0,1.05), expand=c(0,0)) +
+      scale_x_continuous(name = "cellularity (%)", limits = c(max(0,100*(celllow-0.05)),min(105,100*(cellhigh+0.05))), expand=c(0,0)) +
+      geom_vline(xintercept = seq(from = 10, to = 100, by = 10), color = "#666666", linetype = "dashed") +
+      geom_point(aes(y=errorlist, x=cellularity), data=tempdf) +
+      geom_point(aes(y=rerror, x=minima), data=minimadf, color = 'red') +
+      theme_classic() + theme(
+        axis.line = element_line(color='black'), axis.ticks = element_line(color='black'), axis.text = element_text(color='black')) +
+      ggtitle("errorlist") +
+      theme(plot.title = element_text(hjust = 0.5))
+  } else {
+    tempplot <- ggplot2::ggplot() +
+      scale_y_continuous(name = "relative error", limits = c(0,1.05), expand=c(0,0)) +
+      scale_x_continuous(name = "cellularity (%)", limits = c(max(0,celllow-0.05),min(100,cellhigh+0.05)), expand=c(0.0)) +
+      geom_vline(xintercept = seq(from = 10, to = 100, by = 10), color = "#666666", linetype = "dashed") +
+      geom_point(aes(y=errorlist, x=cellularity), data=tempdf) +
+      theme_classic() + theme(
+        axis.line = element_line(color='black'), axis.ticks = element_line(color='black'), axis.text = element_text(color='black')) +
+      ggtitle("errorlist") +
+      theme(plot.title = element_text(hjust = 0.5))
+  }
+  
+  return(list(ploidy=ploidy,standard=standard,method=method,penalty=penalty,minima=minima,rerror=rerror,errorlist=errorlist,errorplot=tempplot))
+  
+}
+
+extractdata <- function(object,Mreads,tdp=50,repeats=1,cellularities=1:100/100,
+                        penalties=c(0,0.25,0.5,1),methods=c("RMSE","MAE"),ploidy=2) {
+  pd<-pData(object)
+  names <- as.vector(pd$name)[(tdp[1]*repeats+1):((tail(tdp,1)+1)*repeats)]
+  sample <- rep(names, each = length(penalties)*length(methods))
+  realtdp <- rep(tdp, each = length(penalties)*length(methods)*repeats)
+  bestfits <- c()
+  method <- c()
+  penalty <- c()
+  for (a in 1:length(names)) {
+    for (b in penalties) {
+      for (c in methods) {
+        
+        sm <- sm2(object,a,method=c,penalty=b,ploidy=ploidy,cellularities=cellularities)
+        cell <- sm$minima[tail(which(sm$rerror==min(sm$rerror)),1)]
+        bestfits <- append(bestfits,cell)
+        method <- append(method,c)
+        penalty <- append(penalty,b)
+        
+      }
+    }
+  }
+  if(missing(Mreads)) {
+    Mreads <- rep(as.integer(NA),length(sample))
+  } else {
+    Mreads <- rep(Mreads,length(sample))
+  }
+  
+  df <- data.frame(sample,realtdp,bestfits,method,penalty,Mreads)
+  return(df)
+}
+
+```
+
+To extract the data from the QDNAseqCopyNumbers object created from the simulated data ...
+```{r bootstrapping ACE}
+aceSCC <- extractdata(segSCC, Mreads = Mreads, tdp = 0:100, repeats = repeats, penalties = 0.5, methods = "MAE", cellularities = 1:100/100)
+aceHCT <- extractdata(segHCT, Mreads = Mreads, tdp = 0:100, repeats = repeats, penalties = 0.5, methods = "MAE", cellularities = 1:100/100)
+aceHT <- extractdata(segHT, Mreads = Mreads, tdp = 0:100, repeats = repeats, penalties = 0.5, methods = "MAE", ploidy = 3, cellularities = 1:100/100)
+aceMO <- extractdata(segMO, Mreads = Mreads, tdp = 0:100, repeats = repeats, penalties = 0.5, methods = "MAE", ploidy = 4, cellularities = 1:100/100)
+
+SCCsegmented <- assayData(data_segmented)$segmented[,2]
+SCC <- 2 * mean(SCCsegmented, na.rm = TRUE) / median(SCCsegmented, na.rm = TRUE)
+aceSCC$Ploidy <- 2
+aceSCC$rep <- as.numeric(gsub(".*_", "", x = aceSCC$sample))
+aceSCC$exptcp <- aceSCC$realtdp
+aceSCC$exptcp[aceSCC$realtdp!=0] <- 200 / (2 + SCC*(100/(aceSCC$realtdp[aceSCC$realtdp!=0]) - 1))
+aceSCC$Line <- "UM-SCC-22A"
+
+HCTsegmented <- assayData(data_segmented)$segmented[,3]
+HCT <- 2 * mean(HCTsegmented, na.rm = TRUE) / median(HCTsegmented, na.rm = TRUE)
+aceHCT$Ploidy <- 2
+aceHCT$rep <- as.numeric(gsub(".*_", "", x = aceHCT$sample))
+aceHCT$exptcp <- aceHCT$realtdp
+aceHCT$exptcp[aceHCT$realtdp!=0] <- 200 / (2 + HCT*(100/(aceHCT$realtdp[aceHCT$realtdp!=0]) - 1))
+aceHCT$Line <- "HCT116"
+
+HTsegmented <- assayData(data_segmented)$segmented[,4]
+HT <- 3 * mean(HTsegmented, na.rm = TRUE) / median(HTsegmented, na.rm = TRUE)
+aceHT$Ploidy <- 3
+aceHT$rep <- as.numeric(gsub(".*_", "", x = aceHT$sample))
+aceHT$exptcp <- aceHT$realtdp
+aceHT$exptcp[aceHT$realtdp!=0] <- 200 / (2 + HT*(100/(aceHT$realtdp[aceHT$realtdp!=0]) - 1))
+aceHT$Line <- "HT29"
+
+MOsegmented <- assayData(data_segmented)$segmented[,5]
+MO <- 4 * mean(MOsegmented, na.rm = TRUE) / median(MOsegmented, na.rm = TRUE)
+aceMO$Ploidy <- 4
+aceMO$rep <- as.numeric(gsub(".*_", "", x = aceMO$sample))
+aceMO$exptcp <- aceMO$realtdp
+aceMO$exptcp[aceMO$realtdp!=0] <- 200 / (2 + MO*(100/(aceMO$realtdp[aceMO$realtdp!=0]) - 1))
+aceMO$Line <- "MOLT-4"
+
+ACE <- rbind(aceSCC,aceHCT,aceHT,aceMO)
+ACE <- ACE[, c(1,3,7,8,2,9,10)]
+colnames(ACE) <- c("Sample", "Cellularity", "Ploidy", "rep", "realtdp", "exptcp", "Line")
+ACE$Method <- "ACE"
+write.table(ACE, "ACE.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+Supplementary Figure 1A
+
+```{r SF1A}
+#
+pdf("plots/cnpSCC.pdf", height = 4, width = 6)
+singleplot(data_segmented, 2, chrsubset = 1:22) + theme(text = element_blank())
+dev.off()
+pdf("plots/cnpHCT.pdf", height = 4, width = 6)
+singleplot(data_segmented, 3, chrsubset = 1:22) + theme(text = element_blank())
+dev.off()
+pdf("plots/cnpHT.pdf", height = 4, width = 6)
+singleplot(data_segmented, 4, ploidy = 3, chrsubset = 1:22) + theme(text = element_blank())
+dev.off()
+pdf("plots/cnpMO.pdf", height = 4, width = 6)
+singleplot(data_segmented, 5, ploidy = 4, chrsubset = 1:22) + theme(text = element_blank())
+dev.off()
+singleplot(data_segmented, 2)
+singleplot(data_segmented, 3)
+singleplot(data_segmented, 4, ploidy = 3)
+singleplot(data_segmented, 5, ploidy = 4)
+```
+
+Supplementary Figure 1B
+
+```{r SF1B, fig.width=6, fig.height=6}
+# AAI <- rbind(ABS,ichor,ACE)
+SF1B <- ggplot(AAI, aes(x=realtdp,y=100*Cellularity,color=Method))+
+  scale_y_continuous(name="Estimated tumor cell percentage",limits=c(0,101),expand=c(0,0)) +
+  scale_x_continuous(name="Percentage tumor reads",limits=c(0,101),expand=c(0,0)) +
+  geom_point(alpha=0.5,shape=16,position=position_jitter(height=.4,width=.4)) +
+  geom_line(aes(x=realtdp,y=exptcp),color='black') +
+  scale_color_manual(breaks = c("ABS", "ichor", "ACE"), values = c("red", "darkgreen", "blue")) +
+  theme_classic() + theme(
+    axis.line = element_line(color='black'), 
+    axis.ticks = element_line(color='black'), 
+    axis.text = element_text(color='black')) +
+  facet_rep_wrap(.~factor(Line, levels = c("UM-SCC-22A", "HCT116", "HT29", "MOLT-4"))) + 
+  theme(strip.background = element_blank()) +
+  theme(panel.spacing = unit(2,"lines"))
+SF1B
+pdf("plots/AAI.pdf", width = 6, height = 6)
+SF1B + theme(text = element_blank())
+dev.off()
+```
+
+This is very close to the picture presented in the figure. The difference is that I made individual plots of the different methods (with the same color scheme), and overlayed them in Adobe Illustrator, which has the ability to "darken" the colors. This allowed me to better demonstrate when results of algorithms overlap.
+
+
+## Investigating specificity and sensitivity of ACE
+
+The paper explores the effect of the penalty parameter of model fitting in ACE. This analysis was in fact conducted on data using several bin sizes and several read depths. You can see the loops to include this, they have been commented out to run it with just the available data. The object names of the segmented data are already correct. The analyses of the different cell lines all include 10 permutations without tumor-derived reads. These represent 30 indepedent permutations of normal-only reads.
+
+```{r}
+samplename <- c()
+minpen <- c()
+method <- c()
+bin <- c()
+reads <- c()
+
+binsize <- 1000
+Mreads <- 10
+# for (binsize in c(100,500,1000)) {
+  # for (Mreads in c(1,2,5,10)) {
+
+    # load objects subsetted for realtcp==0
+    # segSCC <- readRDS(paste0("seg/segSCC_",binsize,"_",Mreads,".rds"))[,1:10]
+    # segHT <- readRDS(paste0("seg/segHT29_",binsize,"_",Mreads,".rds"))[,1:10]
+    # segHCT <- readRDS(paste0("seg/segHCT116_",binsize,"_",Mreads,".rds"))[,1:10]
+    
+    # extract data
+    FP1 <- extractdata(segSCC,Mreads = Mreads, tdp = 0, repeats = repeats, penalties = seq(0,1,0.01), cellularities = 5:100/100)
+    FP1$sample <- gsub("TvN","SCC",FP1$sample)
+    # there are no actual tumor reads, ploidy = 3 is irrelevant for this analysis
+    FP2 <- extractdata(segHT,Mreads = Mreads, tdp = 0, repeats = repeats, penalties = seq(0,1,0.01), cellularities = 5:100/100)
+    FP2$sample <- gsub("TvN","HT",FP2$sample)
+    FP3 <- extractdata(segHCT,Mreads = Mreads, tdp = 0, repeats = repeats, penalties = seq(0,1,0.01), cellularities = 5:100/100)
+    FP3$sample <- gsub("TvN","HCT",FP3$sample)
+    FP <- rbind(FP1,FP2,FP3)
+    MAE <- c()
+    RMSE <- c()
+    for (i in seq_len(3*repeats)-1) {
+      MAE <- append(MAE,FP$penalty[(202*i)+min(which(FP$bestfits[(202*i+1):(202*(i+1))]==1&FP$method=="MAE"))])
+      RMSE <- append(RMSE,FP$penalty[(202*i)+min(which(FP$bestfits[(202*i+1):(202*(i+1))]==1&FP$method=="RMSE"))])
+    }
+    samplename <- append(samplename,c(rle(FP$sample)$values,rle(FP$sample)$values))
+    minpen <- append(minpen,c(MAE,RMSE))
+    method <- append(method,c(rep("MAE",3*repeats),rep("RMSE",3*repeats)))
+    bin <- append(bin,rep(binsize,6*repeats))
+    reads <- append(reads,rep(Mreads,6*repeats))
+
+#  }
+#}
+
+dfFP <- data.frame(sample=samplename,minpen,method,binsize=bin,Mreads=reads)
+
+# I have added upper and lower bounds of 95% quantile
+# I am using some dplyr functionality to perform transformations over groups
+
+ci <- group_by_at(dfFP, vars(Mreads,binsize,method)) %>% summarise_at(vars(minpen), funs(mean,sd))
+# add the 95% interval
+ci$high<-ci$mean+1.96*ci$sd
+ci$low<-ci$mean-1.96*ci$sd
+
+# okay, this is all a bit awkward without the extra data
+ggplot(dfFP, aes(y=minpen, x=Mreads, color=method)) +
+  scale_y_continuous(name="Lowest penalty without false positives",limits=c(0,0.25),expand=c(0,0)) +
+  scale_x_continuous(trans = "log10", name = "Million reads per permutation sample", limits=c(8,12.5)) +
+  geom_point(alpha=0.5,shape=16,position=position_jitter(height=.004,width=.04)) +
+  theme_classic() + theme(axis.text=element_text(color='black')) 
+
+```
+
+```{r SF2A, fig.width=9, fig.height=3}
+# The data from the complete bootstrapping exercise are included in supplementary data
+ci <- group_by_at(dfFP5, vars(Mreads,binsize,method)) %>% summarise_at(vars(minpen), funs(mean,sd))
+# add the 95% interval
+ci$high<-ci$mean+1.96*ci$sd
+ci$low<-ci$mean-1.96*ci$sd
+FPplot <- ggplot(dfFP5, aes(y=minpen, x=Mreads, color=method)) +
+  scale_y_continuous(name="Lowest penalty without false positives",limits=c(0,0.25),expand=c(0,0)) +
+  scale_x_continuous(trans = "log10", name = "Million reads per permutation sample", breaks = c(1,2,5,10)) +
+  geom_point(alpha=0.5,shape=16,position=position_jitter(height=.004,width=.04)) +
+  geom_line(data = ci, aes(y=high, x = Mreads, color = method)) +
+  theme_classic() + theme(axis.text=element_text(color='black')) +
+  facet_rep_grid(.~binsize) + theme(strip.background = element_blank()) +
+  theme(panel.spacing = unit(1,"lines"))
+FPplot
+pdf("plots/FPplot.pdf", width = 9, height = 3)
+FPplot + theme(text = element_blank())
+dev.off()
+```
+
+Supplementary Figure 2B then is a repeat of SF1B but with only ACE, and adjusted range of axes
+
+```{r SF2B, fig.height=3,fig.width=9, warning = FALSE, message = FALSE}
+senseSCC <- extractdata(segSCC, tdp = 0:100, Mreads = Mreads, repeats = repeats, penalties = 0.1, methods = c("RMSE","MAE"), cellularities = 5:100/100)
+senseSCC$Line <- "UM-SCC-22A"
+senseHCT <- extractdata(segHCT, tdp = 0:100, Mreads = Mreads, repeats = repeats, penalties = 0.1, methods = c("RMSE","MAE"), cellularities = 5:100/100)
+senseHCT$Line <- "HCT116"
+senseHT <- extractdata(segHT, tdp = 0:100, Mreads = Mreads, repeats = repeats, penalties = 0.1, methods = c("RMSE","MAE"), ploidy = 3, cellularities = 5:100/100)
+senseHT$Line <- "HT29"
+sense <- rbind(senseSCC, senseHCT, senseHT)
+
+sense$capped <- sense$bestfits*100
+sense$capped[sense$capped>11.5] <- 11.5
+
+ggplot(sense, aes(x=realtdp,y=capped,color=method))+
+  scale_y_continuous(name="Estimated tumor cell percentage",limits=c(3.5,11.9), breaks = 5:10, expand = c(0,0)) +
+  scale_x_continuous(name="Percentage tumor reads",limits=c(0,10.5), breaks = 2*(0:5)) +
+  geom_point(alpha=0.5,shape=16,position=position_jitter(height=.2,width=.2)) +
+    theme_classic() + theme(
+    axis.line = element_line(color='black'), axis.ticks = element_line(color='black'), axis.text = element_text(color='black')) +
+  facet_rep_grid(.~Line) + theme(strip.background = element_blank()) +
+  theme(panel.spacing = unit(2,"lines"))
+
+# Note, of course, that sensitivity will be reduced with fewer reads
+
+# Using the full data
+sensitivity$capped <- sensitivity$bestfits*100
+sensitivity$capped[sensitivity$capped>11.5] <- 11.5
+
+senseplot <- ggplot(sensitivity, aes(x=realtcp,y=capped,color=method))+
+  scale_y_continuous(name="Estimated tumor cell percentage",limits=c(3.5,11.9), breaks = 5:10, expand = c(0,0)) +
+  scale_x_continuous(name="Percentage tumor reads",limits=c(0,10.5), breaks = 2*(0:5)) +
+  geom_point(alpha=0.5,shape=16,position=position_jitter(height=.2,width=.2)) +
+    theme_classic() + theme(
+    axis.line = element_line(color='black'), axis.ticks = element_line(color='black'), axis.text = element_text(color='black')) +
+  facet_rep_grid(.~Line) + theme(strip.background = element_blank()) +
+  theme(panel.spacing = unit(2,"lines"))
+senseplot
+pdf("plots/sensitivity_plot.pdf", width = 9, height = 3)
+senseplot + theme(text = element_blank())
+dev.off()
+``` 
+
+The last exercise, represented in Supplementary figure 3, represents all the bootstrapping of ACE! It's a lot. You would also need the data from the 100 kbp and 500 kbp bin sizes to be complete, but I have commented that out in the code. Here is the code to get the data, but it will take quite some time to run... Especially if you include the 100 kbp data. 
+
+```{r bigger boots, eval = FALSE}
+# dir.create("rc")
+# dir.create("seg")
+
+# bin size 1000
+normal <- as.vector(data_readcounts@assayData$counts[,1])
+bins <- QDNAseq::getBinAnnotations(binSize = 1000)
+
+# run for UM-SCC-22A (2N) bin size 1000
+tumor <- as.vector(data_readcounts@assayData$counts[,2])
+for (r in c(1,2,5,10)) {
+  tdp <- 0:100
+  repeats <- 10
+  mat <- admix(tumor=tumor,normal=normal,tdp=tdp,repeats=repeats,Mreads=r)
+  rownames(mat) <- rownames(bins)
+  phenodata=data.frame(name=colnames(mat),row.names = colnames(mat))
+  objname <- paste0("rcSCC_1000_",r)
+  assign(objname, new("QDNAseqReadCounts",bins=bins,counts=mat,phenodata=phenodata))
+  saveRDS(get(objname), file = paste0("rc/",objname,".rds"))
+  segname <- paste0("segSCC_1000_",r)
+  assign(segname, rctosegmented(get(objname),saveobject=TRUE,filename=paste0("seg/",segname,".rds")))
+  assign(objname,NULL)
+  if (r==1) {
+    df1000 <- extractdata(get(segname),Mreads=r,tdp=tdp,repeats=repeats,ploidy=2)
+  } else {
+    df1000 <- rbind(df1000,extractdata(get(segname),Mreads=r,tdp=tdp,repeats=repeats,ploidy=2))
+  } 
+  assign(segname,NULL)
+}
+write.table(df1000, file = "dfSCC_1000.tsv", quote = FALSE, sep = "\t", row.names = FALSE)
+SCC1000 <- df1000
+
+# run for HCT116 (2N) bin size 1000
+tumor <- as.vector(data_readcounts@assayData$counts[,3])
+for (r in c(1,2,5,10)) {
+  tdp <- 0:100
+  repeats <- 10
+  mat <- admix(tumor=tumor,normal=normal,tdp=tdp,repeats=repeats,Mreads=r)
+  rownames(mat) <- rownames(bins)
+  phenodata=data.frame(name=colnames(mat),row.names = colnames(mat))
+  objname <- paste0("rcHCT116_1000_",r)
+  assign(objname, new("QDNAseqReadCounts",bins=bins,counts=mat,phenodata=phenodata))
+  saveRDS(get(objname), file = paste0("rc/",objname,".rds"))
+  segname <- paste0("segHCT116_1000_",r)
+  assign(segname, rctosegmented(get(objname),saveobject=TRUE,filename=paste0("seg/",segname,".rds")))
+  assign(objname,NULL)
+  if (r==1) {
+    df1000 <- extractdata(get(segname),Mreads=r,tdp=tdp,repeats=repeats,ploidy=2)
+  } else {
+    df1000 <- rbind(df1000,extractdata(get(segname),Mreads=r,tdp=tdp,repeats=repeats,ploidy=2))
+  } 
+  assign(segname,NULL)
+}
+write.table(df1000, file = "dfHCT116_1000.tsv", quote = FALSE, sep = "\t", row.names = FALSE)
+HCT1000 <- df1000
+
+# run for HT29 (3N) bin size 1000
+tumor <- as.vector(data_readcounts@assayData$counts[,4])
+for (r in c(1,2,5,10)) {
+  tdp <- 0:100
+  repeats <- 10
+  mat <- admix(tumor=tumor,normal=normal,tdp=tdp,repeats=repeats,Mreads=r)
+  rownames(mat) <- rownames(bins)
+  phenodata=data.frame(name=colnames(mat),row.names = colnames(mat))
+  objname <- paste0("rcHT29_1000_",r)
+  assign(objname, new("QDNAseqReadCounts",bins=bins,counts=mat,phenodata=phenodata))
+  saveRDS(get(objname), file = paste0("rc/",objname,".rds"))
+  segname <- paste0("segHT29_1000_",r)
+  assign(segname, rctosegmented(get(objname),saveobject=TRUE,filename=paste0("seg/",segname,".rds")))
+  assign(objname,NULL)
+  if (r==1) {
+    df1000 <- extractdata(get(segname),Mreads=r,tdp=tdp,repeats=repeats,ploidy=3)
+  } else {
+    df1000 <- rbind(df1000,extractdata(get(segname),Mreads=r,tdp=tdp,repeats=repeats,ploidy=3))
+  } 
+  assign(segname,NULL)
+}
+write.table(df1000, file = "dfHT29_1000.tsv", quote = FALSE, sep = "\t", row.names = FALSE)
+HT1000 <- df1000
+
+# okay, for the other bin sizes, just link to the right files and change the instances of bin sizes
+```
+
+For purposes of replotting, you can use the bootstrapping results data frame from the supplementary data. Note that the column names of bootstrapACE are a little bit different than the ones generated above. 
+
+```{r SF3, warning = FALSE, message = FALSE}
+library(ACE)
+library(ggplot2)
+library(lemon)
+library(dplyr)
+library(Biobase)
+
+df <- bootstrapACE
+df$penalty_label <- as.factor(df$penalty)
+levels(df$penalty_label)[1] <- "penalty = 0"
+levels(df$penalty_label)[2] <- "penalty = 0.25"
+levels(df$penalty_label)[3] <- "penalty = 0.5"
+levels(df$penalty_label)[4] <- "penalty = 1"
+df$Mreads <- as.factor(df$Mreads)
+levels(df$Mreads) <- c("1M reads","2M reads","5M reads","10M reads")
+
+dir.create("images")
+dir.create("images/pdf")
+
+lines <- c("HCT116", "HT29", "UM-SCC-22A")
+binsizes <- c(100,500,1000)
+
+for (l in lines) {
+  for (b in binsizes) {
+    dftemp <- df[df$line == l & df$binsize == b,]
+    plot <- ggplot(dftemp, aes(x=real_tdp,y=est_tcp,color=method)) +
+              scale_y_continuous(name="Estimated tumor cell percentage",limits=c(0,101),expand=c(0,0)) +
+              scale_x_continuous(name="Percentage tumor reads",limits=c(0,101),expand=c(0,0)) +
+              geom_point(alpha=0.5,shape=16,position=position_jitter(height=.4,width=.4)) +
+              geom_line(aes(x=real_tdp,y=exp_tcp),color='black') +
+              ggtitle(paste0(l, ", binsize ", b, " kbp")) +
+              theme_classic() + theme(
+                axis.line = element_line(color='black'), 
+                axis.ticks = element_line(color='black'), 
+                axis.text = element_text(color='black'),
+                plot.title = element_text(hjust = 0.5)) + 
+              facet_rep_grid(Mreads~penalty_label) + theme(strip.background = element_blank()) +
+              theme(panel.spacing = unit(1,"lines"))
+    pdf(paste0("images/pdf/", l, "_", b, ".pdf"), width = 10.5, height = 10.5)
+    print(plot)
+    dev.off()
+  }
+}
+```
+
+That was a big one!
+
+Now note that we have already plotted supplementary figure 4 and 5 above.
+
+Supplementary figure 6 is a test to see how high-level gains influence model fitting. This figure was made entirely from random data, so no problem to repeat that here! But ... doing it with 10,000 repititions will not be a good idea for a markdown document. I have done it below with 100, and just set it to 10,000 and run it separately in a session to get the full data set if you must!
+
+```{r High level gains}
+# set the number of simulations you want to run for each setting
+nsim <- 100
+# let's use a seed for reproducibility
+set.seed(765348)
+# Assume a genome with 5 chromosomes, each with 100 bins, now assume a tumor has
+# 2 unaffected chromosomes, a single loss, a double gain, and a chromosome with 
+# 8 copies. The high-level gain is expected to perturb the accuracy of model
+# prediction. We also introduce a control tumor with the last chromosome also
+# being 2 copies, so no high-level amplifications.
+truth1 <- c(rep(1,100), rep(2,200), rep(4,100), rep(8,100))
+truth2 <- c(rep(1,100), rep(2,200), rep(4,100), rep(2,100))
+# We need to make permutations at certain tumor percentages. I make a function
+# that creates such permuations, and a small function to return the best fit of
+# the ACE singlemodel algorithm.
+# We need the bins and chromosome information for all bins
+chr1 <- rep(1:5, each = 100)
+permute <- function(truth, chr, tumorreads, normalreads) {
+    reads <- as.vector(table(c(sample(seq_along(truth), tumorreads, TRUE, truth), 
+                               sample(seq_along(truth), normalreads, TRUE, 
+                                      rep(1, length(truth))), seq_along(truth))))-1
+    copynumbers <- reads / median(reads)
+    segments <- c()
+    bins <- seq_along(truth)
+    for (b in bins) {
+        segments <- append(segments, mean(copynumbers[chr==chr[b]]))
+    }
+    return(data.frame(bin = bins, chr = chr, copynumbers = copynumbers, segments = segments))
+}
+returnbestfit <- function(permutation, penalty = 0, method = "RMSE", ploidy = 2) {
+    sm <- singlemodel(permutation, penalty = penalty, method = method, ploidy = ploidy)
+    minimum <- sm$minima[tail(which.min(sm$rerror),1)]
+    return(minimum)
+}
+# As before, the admixing is based on tumor DNA percentages, whereas the 
+# algorithm returns tumor cell percentage estimates. To make a fair comparison 
+# between the two modeled tumor samples, we need calculate a tumor DNA 
+# percentage that corresponds to equal tumor cell percentages. Let's first do it
+# for a 80/20 example:
+tdp1 <- (0.8 * mean(truth1) / median(truth1)) / (0.8 * mean(truth1) / median(truth1) + 0.2)
+tdp2 <- (0.8 * mean(truth2) / median(truth2)) / (0.8 * mean(truth2) / median(truth2) + 0.2)
+# We can now use this to calculate fits for both cases:
+fit <- c()
+estimate <- c()
+method <- c()
+penalty <- c()
+for (p in seq_len(nsim)) {
+    temp <- permute(truth1, chr1, tdp1*1000000, (1-tdp1)*1000000)
+    fit <- append(fit, rep("fit1", 4))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "MAE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "MAE"))
+    method <- append(method, c("RMSE", "RMSE", "MAE", "MAE"))
+    penalty <- append(penalty, c(0, 0.5, 0, 0.5))
+}
+fits1 <- data.frame(fit, estimate, method, penalty)
+fit <- c()
+estimate <- c()
+method <- c()
+penalty <- c()
+for (p in seq_len(nsim)) {
+    temp <- permute(truth2, chr1, tdp2*1000000, (1-tdp2)*1000000)
+    fit <- append(fit, rep("fit2", 4))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "MAE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "MAE"))
+    method <- append(method, c("RMSE", "RMSE", "MAE", "MAE"))
+    penalty <- append(penalty, c(0, 0.5, 0, 0.5))
+}
+fits2 <- data.frame(fit, estimate, method, penalty)
+
+tdp3 <- (0.3 * mean(truth1) / median(truth1)) / (0.3 * mean(truth1) / median(truth1) + 0.7)
+
+tdp4 <- (0.3 * mean(truth2) / median(truth2)) / (0.3 * mean(truth2) / median(truth2) + 0.7)
+
+fit <- c()
+estimate <- c()
+method <- c()
+penalty <- c()
+for (p in seq_len(nsim)) {
+    temp <- permute(truth1, chr1, tdp3*1000000, (1-tdp3)*1000000)
+    fit <- append(fit, rep("fit3", 4))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "MAE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "MAE"))
+    method <- append(method, c("RMSE", "RMSE", "MAE", "MAE"))
+    penalty <- append(penalty, c(0, 0.5, 0, 0.5))
+}
+fits3 <- data.frame(fit, estimate, method, penalty)
+fit <- c()
+estimate <- c()
+method <- c()
+penalty <- c()
+for (p in seq_len(nsim)) {
+    temp <- permute(truth2, chr1, tdp4*1000000, (1-tdp4)*1000000)
+    fit <- append(fit, rep("fit4", 4))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "MAE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "MAE"))
+    method <- append(method, c("RMSE", "RMSE", "MAE", "MAE"))
+    penalty <- append(penalty, c(0, 0.5, 0, 0.5))
+}
+fits4 <- data.frame(fit, estimate, method, penalty)
+
+truth3 <- c(rep(1,50), rep(2,450), rep(8,50))
+truth4 <- c(rep(1,50), rep(2,250), rep(3,200), rep(4,50))
+chr2 <- rep(1:11, each = 50)
+tdp5 <- (0.8 * mean(truth3) / median(truth3)) / (0.8 * mean(truth3) / median(truth3) + 0.2)
+tdp6 <- (0.8 * mean(truth4) / median(truth4)) / (0.8 * mean(truth4) / median(truth4) + 0.2)
+tdp5==tdp6
+fit <- c()
+estimate <- c()
+method <- c()
+penalty <- c()
+for (p in seq_len(nsim)) {
+    temp <- permute(truth3, chr2, tdp5*1000000, (1-tdp5)*1000000)
+    fit <- append(fit, rep("fit5", 4))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "MAE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "MAE"))
+    method <- append(method, c("RMSE", "RMSE", "MAE", "MAE"))
+    penalty <- append(penalty, c(0, 0.5, 0, 0.5))
+}
+fits5 <- data.frame(fit, estimate, method, penalty)
+fit <- c()
+estimate <- c()
+method <- c()
+penalty <- c()
+for (p in seq_len(nsim)) {
+    temp <- permute(truth4, chr2, tdp6*1000000, (1-tdp6)*1000000)
+    fit <- append(fit, rep("fit6", 4))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "MAE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "MAE"))
+    method <- append(method, c("RMSE", "RMSE", "MAE", "MAE"))
+    penalty <- append(penalty, c(0, 0.5, 0, 0.5))
+}
+fits6 <- data.frame(fit, estimate, method, penalty)
+
+tdp7 <- (0.3 * mean(truth3) / median(truth3)) / (0.3 * mean(truth3) / median(truth3) + 0.7)
+tdp8 <- (0.3 * mean(truth4) / median(truth4)) / (0.3 * mean(truth4) / median(truth4) + 0.7)
+tdp7==tdp8
+fit <- c()
+estimate <- c()
+method <- c()
+penalty <- c()
+for (p in seq_len(nsim)) {
+    temp <- permute(truth3, chr2, tdp7*1000000, (1-tdp7)*1000000)
+    fit <- append(fit, rep("fit7", 4))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "MAE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "MAE"))
+    method <- append(method, c("RMSE", "RMSE", "MAE", "MAE"))
+    penalty <- append(penalty, c(0, 0.5, 0, 0.5))
+}
+fits7 <- data.frame(fit, estimate, method, penalty)
+fit <- c()
+estimate <- c()
+method <- c()
+penalty <- c()
+for (p in seq_len(nsim)) {
+    temp <- permute(truth4, chr2, tdp8*1000000, (1-tdp8)*1000000)
+    fit <- append(fit, rep("fit8", 4))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "RMSE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0, method = "MAE"))
+    estimate <- append(estimate, returnbestfit(temp, penalty = 0.5, method = "MAE"))
+    method <- append(method, c("RMSE", "RMSE", "MAE", "MAE"))
+    penalty <- append(penalty, c(0, 0.5, 0, 0.5))
+}
+fits8 <- data.frame(fit, estimate, method, penalty)
+singleplot(permute(truth1, chr1, 1000000))
+singleplot(permute(truth2, chr1, 1000000))
+singleplot(permute(truth3, chr2, 1000000))
+singleplot(permute(truth4, chr2, 1000000))
+
+# Here is an example of a how the histogram was plotted:
+ggplot(fits1[fits1$method=="RMSE"&fits1$penalty==0.5,]) + geom_histogram(aes(x = estimate), bins = 13) +
+    scale_x_continuous(limits = c(0.765, 0.825), name = "Estimated cellularity", breaks = (77:82)/100) +
+    scale_y_continuous(limits = c(0,nsim), expand = c(0,0)) +
+    theme_classic()
+
+save(fits1, fits2, fits3, fits4, fits5, fits6, fits7, fits8, file = "fits.RDATA")
+```
+
+Good luck!
+
+```{r session info}
+sessionInfo()
+```

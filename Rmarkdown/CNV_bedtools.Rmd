@@ -1,0 +1,868 @@
+---
+title: "Assess Mapped Reads with Bedtools"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: True
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(reshape2)
+library(gridExtra)
+library(scales)
+source("../Rscripts/BaseScripts.R")
+library(data.table)
+```
+
+
+
+# Using bedtools to extract the number of mapped reas per 1k-window per population
+
+## Create bed files with 1k windows  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+chsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+
+#Prevent scientific notation in bed files
+options(scipen=999)
+library(DataCombine)
+
+for (i in 1:26){
+    l<-chsize$V3[i]
+    ends<-seq(1000,l, by=1000)
+    start<-seq(1,l, by=1000) 
+   
+    new<-data.frame(ch=paste0("chr",i), st=start,en=c(ends, l))
+    new<-InsertRow(new,c("track=e=bedGrapph", '', ''), 1)
+    write.table(new, paste0("../Data/bam_depth/bed1k/chr",i,"_1k.bed"), row.names = F, col.names = F, quote = F, sep = "\t")
+}
+
+
+
+```
+
+## Creat bash scripts to sort and index bam files  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pops_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-unique(pops_info$Population.Year)
+
+
+for (i in 1: length(pops)){
+    df<-pops_info[pops_info$Population.Year==pops[i],]
+    sink(paste0("../Data/Slurmscripts/sort_bam_", pops[i],".sh"))
+    cat("#!/bin/bash -l\n")
+    cat(paste0("#SBATCH --job-name=sort",pops[i]," \n"))
+    cat(paste0("#SBATCH --mem=16G \n")) 
+    cat(paste0("#SBATCH --ntasks=8 \n")) 
+    cat(paste0("#SBATCH -e =sort",pops[i],".err  \n"))
+    cat(paste0("#SBATCH --time=200:00:00  \n"))
+    cat(paste0("#SBATCH -p high  \n"))
+    cat("\n\n")
+    cat("module load samtools \n\n") 
+         
+    for (j in 1:nrow(df)){
+        cat(paste0("samtools sort /home/eoziolor/phpopg/data/align/",df$Sample[j],".bam -o /home/ktist/ph/data/bam/",df$Sample[j],"_sorted.bam \n"))
+        cat(paste0("samtools index /home/ktist/ph/data/bam/",df$Sample[j],"_sorted.bam \n"))
+    }
+    sink(NULL)
+}
+
+
+for (i in 1: length(pops)){
+    df<-pops_info[pops_info$Population.Year==pops[i],]
+    sink(paste0("../Data/Slurmscripts/bedtools_count_", pops[i],".sh"))
+    cat("#!/bin/bash -l\n")
+    cat(paste0("#SBATCH --job-name=ct",pops[i]," \n"))
+    cat(paste0("#SBATCH --mem=16G \n")) 
+    cat(paste0("#SBATCH --ntasks=8 \n")) 
+    cat(paste0("#SBATCH -e =ct",pops[i],".err  \n"))
+    cat(paste0("#SBATCH --time=240:00:00  \n"))
+    cat(paste0("#SBATCH -p high  \n"))
+    cat("\n\n")
+    cat("module load bedtools \n\n") 
+    
+    for (c in 1:26){
+        cat(paste0("bedtools multicov -bams "))
+        for (j in 1: nrow(df)){
+            cat(paste0("/home/ktist/ph/data/bam/",df$Sample[j] , "_sorted.bam "))
+        }
+        cat(paste0("-bed /home/ktist/ph/data/bam_depth/chr",c,"_1k.bed > /home/ktist/ph/data/coverage/",pops[i],"_chr",c,".txt \n"))
+    }
+    sink(NULL)
+
+}
+
+```
+
+
+## Calculated the normalized number of mapped reads (based on the total count of reads)
+
+* Located in Data/bam_depth/ReadNumbers/ 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pops_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-unique(pops_info$Population.Year)
+
+## Get the total raw read count per sample from each bam file
+sink("../Data/Slurmscripts/Raw_total_read_count.sh")
+cat("#!/bin/bash -l\n")
+cat(paste0("#SBATCH --job-name=totalRead \n"))
+cat(paste0("#SBATCH --mem=16G \n")) 
+cat(paste0("#SBATCH --ntasks=8 \n")) 
+cat(paste0("#SBATCH -e =totalRead.err  \n"))
+cat(paste0("#SBATCH --time=240:00:00  \n"))
+cat(paste0("#SBATCH -p high  \n"))
+cat("\n\n")
+cat("module load samtools \n\n") 
+
+for (j in 1:nrow(pops_info)){
+    cat(paste0("samtools view -c -F 260 ", "/home/ktist/ph/data/bam/", pops_info$Sample[j], "_sorted.bam > ", pops_info$Sample[j],"_count.txt \n"))
+    }
+sink(NULL)
+
+
+# Compile the files into one
+rfiles<-list.files("../Data/bam_depth/RawTotal/")
+rawTotal<-data.frame(sample=rfiles)
+for (i in 1: length(rfiles)){
+    df<-read.table(paste0("../Data/bam_depth/RawTotal/",rfiles[i]))
+    fname<-gsub("_count.txt", '',rfiles[i])
+    rawTotal$sample[i]<-fname
+    rawTotal$pop[i]<-pops_info$Population.Year[pops_info$Sample==fname]
+    rawTotal$rawTotal[i]<-df$V1[1]
+}
+write.csv(rawTotal, "../Output/CNV/rawReadTotalCount_perSample.csv", row.names = F)
+
+for (i in 1:length(pops)){
+    pop<-pops[i]
+    popdf<-pops_info[pops_info$Population.Year==pop,]
+    n<-nrow(popdf)
+    for(j in 1:26){
+        #read the mapped read number file
+        df<-read.table(paste0("../Data/bam_depth/ReadNumbers/",pop,"_chr",j,".txt"))
+        # normalized by the total read count 
+        df2<-df[,4:ncol(df)]/rawTotal$rawTotal[rawTotal$pop==pop]*10^7
+        # calculate average
+        df2$mean<-rowMeans(df2)
+        reads<-cbind(df[,1:3],df2)
+        write.csv(reads, paste0("../Output/CNV/ReadNumber_normalized_",pop,"_chr",j,'.csv'), row.names = F)
+    }
+}
+
+
+# create a summary of total read count file for record
+for (c in 1:26){
+    total<-data.frame()
+    for (i in 1: length(pops)){
+        pop<-pops[i]
+        popdf<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop, "_chr",c,".csv"))
+        popdf<-popdf[,c(1:3, ncol(popdf))]
+        popdf$pop<-pop
+        total<-rbind(total, popdf)
+    }
+    write.csv(total, paste0("../Output/CNV/Chr",c,"_meanReadCount_perPop.csv"))
+}
+
+# Visualize the output
+#ex. chr1
+#c1<-read.csv("../Output/CNV/Chr1_meanReadCount_perPop.csv", row.names = 1)
+#ggplot(total[total$V3<1000000,], aes(x=V3, y=mean, color=pop))+
+#        geom_point(size=.5)
+#
+
+```
+
+
+# Compare the normalized read counts per 1k window between populations  
+
+## 1. PWS between years
+
+### Plot the overlapping regions between population pairs to look for candidate regions  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pws<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(pws,2))
+
+Plots<-list()
+for (c in 1:26){
+    Results<-data.frame()
+    for (i in 1:nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        n1<-nrow(pops_info[pops_info$Population.Year==pop1,])
+        n2<-nrow(pops_info[pops_info$Population.Year==pop2,])
+        
+        df1<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop1, "_chr",c,".csv"))
+        df2<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop2, "_chr",c,".csv"))
+        combdf<-cbind(df1[,4:(ncol(df1)-1)],df2[,4:(ncol(df2)-1)])
+        wilcoxResults<-apply(combdf, 1, function(x){ wilcox.test(x[1:n1],x[(n1+1):(n1+n2)]) })
+        sig<-lapply(wilcoxResults,function(x) {x<-unlist(x)
+                                        p<-unname(x[2])
+                                        return(as.numeric(p)) })
+        #add row numbers to find consecutive windows
+        df1$number<-1:nrow(df1)
+        df2$number<-1:nrow(df2)
+        #calculate SD for plotting
+        df1$sd<-apply(df1[,c(4:(n1+3))], 1, sd)
+        df2$sd<-apply(df2[,c(4:(n2+3))], 1, sd)
+        
+        test<-df1[,c("number","V1","V2","V3")]    
+        test$p.value<-unlist(sig)
+        test<-test[test$p.value<=0.01,]
+        re1<-merge(test, df1[,c("number","V1","V2","V3","mean","sd")])
+        re2<-merge(test, df2[,c("number","V1","V2","V3","mean","sd")])
+        re1$pop<-pop1
+        re2$pop<-pop2
+        results<-rbind(re1,re2)
+        
+        # Find consecutive windows
+        re1<-re1[order(re1$number),]
+        breaks<-c(0, which(diff(re1$number) != 1),length(re1$number))
+        runpos<-sapply(seq(length(breaks)-1),
+               function(x) re1$number[(breaks[x]+1):breaks[x+1]])
+        runpos3<-Filter(function(x) any(length(unlist(x))>=5), runpos)
+        
+        # filter the results to only consecutive positions
+        if(length(runpos3)>0){
+            positions<-unlist(runpos3)
+            results<-results[results$number %in% positions,]
+            results$comp<-paste0(pop1,"_",pop2)
+            Results<-rbind(Results, results)
+            write.csv(Results, paste0("../Output/CNV/pairComp/runOver5k.in.chr",c,".csv"))
+        }
+    }
+    
+    
+    ovlap<-as.data.frame.matrix(table(Results$number, Results$comp))
+    ovlap<-ovlap/2
+    ovlap$sum<-rowSums(ovlap)
+    ovlap<-ovlap[ovlap$sum>=2,]
+    ovlap$number<-as.integer(rownames(ovlap))
+    
+    ovlap<-merge(ovlap, re1[,c("number","V2")], by="number")
+    write.csv(ovlap,paste0("../Output/CNV/pairComp/Overlapping.positions.runOver5k.chr",c,".csv"))
+    plots[[c]]<-ggplot(ovlap, aes(x=V2, y=sum))+
+        geom_point(size=0.6, color="steelblue")+
+        ggtitle(paste0("Chr",c))+
+        xlab("")+ylab("No. of population pairs")+
+        scale_y_continuous(breaks = seq(2, max(ovlap$sum), by = 1))+
+            theme_light()+
+        scale_x_continuous(breaks=seq(0, max(re1$V2), by=5000000), labels=comma)+
+        theme(panel.grid.minor.y=element_blank())
+}
+
+
+ {pdf(paste0("../Output/CNV/pairComp/overlapping_windows_PWS.pdf"), width = 12, height = 30)
+        do.call(grid.arrange, c(plots, ncol=1))
+        dev.off()}
+        
+```
+![](../Output/CNV/pairComp/overlapping_windows_PWS.png)
+
+### Plot the regions with P<0.01 for >5 windows per pair  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+# Run Wilcoxon test and extract the sites with P<0.01 over 5 windows (5k)
+# Create a pair table 
+pws<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(pws,2))
+#reorder the comb
+comb<-comb[c(1,4,6,2,3,5),]
+
+#chromossome size
+chsize<-read.table("../Data/new_vcf/chr_sizes.bed")
+
+# name the colors
+colors<-cols[c(1,2,3,5)]
+names(colors)<-pws
+
+for (c in 1:26){
+    plotlist<-list()
+    for (i in 1:nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        n1<-nrow(pops_info[pops_info$Population.Year==pop1,])
+        n2<-nrow(pops_info[pops_info$Population.Year==pop2,])
+        
+        df1<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop1, "_chr",c,".csv"))
+        df2<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop2, "_chr",c,".csv"))
+        combdf<-cbind(df1[,4:(ncol(df1)-1)],df2[,4:(ncol(df2)-1)])
+        wilcoxResults<-apply(combdf, 1, function(x){ wilcox.test(x[1:n1],x[(n1+1):(n1+n2)]) })
+        sig<-lapply(wilcoxResults,function(x) {x<-unlist(x)
+                                        p<-unname(x[2])
+                                        return(as.numeric(p)) })
+        #add row numbers to find consecutive windows
+        df1$number<-1:nrow(df1)
+        df2$number<-1:nrow(df2)
+        #calculate SD for plotting
+        df1$sd<-apply(df1[,c(4:(n1+3))], 1, sd)
+        df2$sd<-apply(df2[,c(4:(n2+3))], 1, sd)
+        
+        test<-df1[,c("number","V1","V2","V3")]    
+        test$p.value<-unlist(sig)
+        test<-test[test$p.value<=0.01,]
+        re1<-merge(test, df1[,c("number","V1","V2","V3","mean","sd")])
+        re2<-merge(test, df2[,c("number","V1","V2","V3","mean","sd")])
+        re1$pop<-pop1
+        re2$pop<-pop2
+        results<-rbind(re1,re2)
+        
+        # Find consecutive windows
+        re1<-re1[order(re1$number),]
+        breaks<-c(0, which(diff(re1$number) != 1),length(re1$number))
+        runpos<-sapply(seq(length(breaks)-1),
+               function(x) re1$number[(breaks[x]+1):breaks[x+1]])
+        runpos3<-Filter(function(x) any(length(unlist(x))>=5), runpos)
+        #saveRDS(runpos3,file=paste0("../Output/CNV/pairComp/chr",c,"_",pop1,".",pop2,"_consecutiveWindows.RData"))
+        # filter the results to only consective positions
+        positions<-unlist(runpos3)
+        results<-results[results$number %in% positions,]
+        
+        colpairs<-colors[c(pop1,pop2)]
+        results$pop<-factor(results$pop, levels=pws)
+        plotlist[[i]]<-ggplot(results, aes(x=V2, y=mean, color=pop))+
+            geom_point(size=1, position=position_dodge(width = 1))+
+            geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd),position=position_dodge(width = 3), width=0.3, size=0.2)+
+            ggtitle(paste0("Chr",c," ", pop1,"-",pop2))+
+            xlab("")+ylab("normalized mean read count per 1k")+
+            theme(legend.title = element_blank())+xlim(0,chsize$V3[c])+
+            scale_color_manual(values=paste0(colpairs, "66"))+
+            theme_bw()
+        
+    
+    }
+    
+    {pdf(paste0("../Output/CNV/pairComp/chr",c,"_PWS_5windows.pdf"), width = 12, height = 16)
+    do.call(grid.arrange, c(plotlist, ncol=1))
+    dev.off()}
+    
+}
+```
+* Chr 1
+![](../Output/CNV/pairComp/chr1_PWS_5windows.png)
+![](../Output/CNV/pairComp/chr15_PWS_5windows.png)
+
+### Look at the bam files for the candidate loci
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Start with windows with significant read numbers difference in multiple population pairs
+#Prevent scientific notation in bed files
+options(scipen=999)
+
+nobuffer<-data.frame(chr="chr",start="start",end="end")
+bedfile<-data.frame(chr="chr",start="start",end="end")
+
+for (i in 1:26){
+    df<-read.csv(paste0("../Output/CNV/pairComp/Overlapping.positions.runOver5k.chr",i,".csv"))
+    df<-df[df$sum>=4,]
+    
+    if (nrow(df)>0){
+        breaks<-c(0, which(diff(df$number) != 1),length(df$number))
+        runpos<-sapply(seq(length(breaks)-1),
+               function(x) df$number[(breaks[x]+1):breaks[x+1]])
+        
+        if (is.list(runpos)) {
+            runpos<-Filter(function(x) any(length(unlist(x))>=5), runpos)
+            for (j in 1:length(runpos)){
+                pos<-runpos[j]
+                pos<-unlist(pos)
+                #no buffer bedfile
+                bed1<-data.frame(chr=paste0("chr",i), start=df$V2[df$number==pos[1]], end=df$V2[df    $number==pos[length(pos)]]+999)
+                nobuffer<-rbind(nobuffer, bed1)               
+                # add 50k buffer around the bed files
+                bed<-data.frame(chr=paste0("chr",i), start=df$V2[df$number==pos[1]], end=df$V2[df    $number==pos[length(pos)]]+999+50000)
+                if (bed$start[1]<50000) bed$start[1]<-0
+                if (bed$start[1]>=50000) bed$start[1]<-bed$start[1]-50000
+                
+                bedfile<-rbind(bedfile,bed)
+            }
+        
+        }
+        
+        if (!is.list(runpos)){
+            if (nrow(runpos)>=5){
+                bed<-data.frame(chr=paste0("chr",i), start=runpos[1,1], end=runpos[nrow(runpos),1]+999+50000)
+                if (bed$start[1]<50000) bed$start[1]<-0
+                if (bed$start[1]>=50000) bed$start[1]<-bed$start[1]-50000
+                bedfile<-rbind(bedfile,bed)
+                bed1<-data.frame(chr=paste0("chr",i), start=runpos[1,1], end=runpos[nrow(runpos),1]+999)
+                nobuffer<-rbind(nobuffer, bed1)    
+                
+            }
+            
+        }
+        
+        
+    }
+}
+bedfile<-bedfile[-1,]
+write.table(bedfile, "../Output/CNV/pairComp/PWS_4overlap_regions.bed", row.names=F, col.names=F,quote=F, sep="\t")
+nobuffer<-nobuffer[-1,]
+write.table(nobuffer, "../Output/CNV/pairComp/PWS_4overlap_regions_noBuffer.bed", row.names=F, col.names=F,quote=F, sep="\t")
+ 
+
+   
+#create a slurm script file to extract regions to visualize
+
+pws96<-pops_info$Sample[pops_info$Population.Year=="PWS96"]
+pws91<-pops_info$Sample[pops_info$Population.Year=="PWS91"]
+pws07<-pops_info$Sample[pops_info$Population.Year=="PWS07"]
+pws17<-pops_info$Sample[pops_info$Population.Year=="PWS17"]
+
+sink("../Data/Slurmscripts/Extract_Depth_PWS.sh")
+cat("#!/bin/bash -l")
+cat("\n")
+cat(paste0("#SBATCH --job-name=DepthPWS \n"))
+cat(paste0("#SBATCH --mem=16G \n")) 
+cat(paste0("#SBATCH --ntasks=1 \n")) 
+cat(paste0("#SBATCH -e Extract_Depth1.err  \n"))
+cat(paste0("#SBATCH --time=144:00:00  \n"))
+cat(paste0("#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc \n"))
+cat(paste0("#SBATCH --mail-type=ALL \n"))
+cat(paste0("#SBATCH -p high  \n"))
+cat("\n\n")
+cat("module load samtools \n") 
+
+for (i in 1:20){
+    cat(paste0("samtools depth -b /home/ktist/ph/data/bam_depth/PWS_4overlap_regions.bed /home/ktist/ph/data/bam/", pws91[i],"_sorted.bam > /home/ktist/ph/data/bam_depth/PWS/",pws91[i],"_overlapRegions.txt \n"))
+    cat(paste0("gzip /home/ktist/ph/data/bam_depth/PWS/",pws91[i],"_overlapRegions.txt \n"))
+    
+    cat(paste0("samtools depth -b /home/ktist/ph/data/bam_depth/PWS_4overlap_regions.bed /home/ktist/ph/data/bam/", pws96[i],"_sorted.bam > /home/ktist/ph/data/bam_depth/PWS/",pws96[i],"_overlapRegions.txt \n"))
+    cat(paste0("gzip /home/ktist/ph/data/bam_depth/PWS/",pws96[i],"_overlapRegions.txt \n"))
+    
+    cat(paste0("samtools depth -b /home/ktist/ph/data/bam_depth/PWS_4overlap_regions.bed /home/ktist/ph/data/bam/", pws07[i],"_sorted.bam > /home/ktist/ph/data/bam_depth/PWS/",pws07[i],"_overlapRegions.txt \n"))
+    cat(paste0("gzip /home/ktist/ph/data/bam_depth/PWS/",pws07[i],"_overlapRegions.txt \n"))
+     cat(paste0("samtools depth -b /home/ktist/ph/data/bam_depth/PWS_4overlap_regions.bed /home/ktist/ph/data/bam/", pws17[i],"_sorted.bam > /home/ktist/ph/data/bam_depth/PWS/",pws17[i],"_overlapRegions.txt \n"))
+    cat(paste0("gzip /home/ktist/ph/data/bam_depth/PWS/",pws17[i],"_overlapRegions.txt \n"))
+}
+sink(NULL)
+
+#plot the results per regions
+
+
+pwslist<-c("pws91","pws96","pws07","pws17")
+
+nobuffer<-read.table("../Output/CNV/pairComp/PWS_4overlap_regions_noBuffer.bed", sep="\t")
+bedfile<-read.table("../Output/CNV/pairComp/PWS_4overlap_regions.bed", sep="\t")
+
+totalreads<-read.csv("../Output/CNV/rawReadTotalCount_perSample.csv")
+
+for (j in 1:length(pwslist)){
+    plist<-get(paste0(pwslist[j]))
+    depth_list<-list()
+    for (i in 1:20){
+        df<-fread(paste0("../Data/bam_depth/PWS_overlap/",plist[i],"_overlapRegions.txt.gz"))
+        
+        reads<-list()
+        for (b in 1: nrow(bedfile)){
+            dp<-df[V1==bedfile$V1[b]& V2>=bedfile$V2[b] & V2<= bedfile$V3[b]]
+            dp$sample<-plist[i]
+            reads[[b]]<-dp
+        }
+        depth_list[[i]]<-reads
+        names(depth_list)[i]<-plist[i]
+    }
+    #saveRDS(depth_list,file=paste0("../Output/CNV/pairComp/PWS_overlap_individual_depth/", pwslist[j],"_depths.RData"))
+    
+    for (b in 1: nrow(bedfile)){
+        data<-lapply(depth_list, '[[', b)
+        depths<-do.call(rbind,data)
+        ggplot(depths, aes(x=V2, y=V3))+
+            facet_wrap(~sample, ncol=4)+
+            geom_point(size=0.3, alpha=0.4, color="blue")+
+            ylab("Read depth")+xlab("")+theme_bw()+
+            theme(panel.grid = element_blank())+ylim(0,30)+
+            ggtitle(paste0(bedfile$V1[b]," ",nobuffer$V2[b],"-",nobuffer$V3[b]))+
+            geom_vline(xintercept = nobuffer$V2[b], color="gray70", size=0.3)+
+            geom_vline(xintercept = nobuffer$V3[b], color="gray70", size=0.3)
+        ggsave(paste0("../Output/CNV/pairComp/PWS_overlap_individual_depth/region_",b,"_",pwslist[j],".png"), width = 12, height=9, dpi=300)
+        }
+    }
+    
+        
+}
+        
+depth_list<-readRDS(file="../Output/CNV/pairComp/PWS_overlap_individual_depth/pws91_depths.RData")
+j=1
+
+for (b in 2: nrow(bedfile)){
+        data<-lapply(depth_list, '[[', b)
+        depths<-do.call(rbind,data)
+        ggplot(depths, aes(x=V2, y=V3))+
+            facet_wrap(~sample, ncol=4)+
+            geom_point(size=0.3, alpha=0.4, color="blue")+
+            ylab("Read depth")+xlab("")+theme_bw()+
+            theme(panel.grid = element_blank())+ylim(0,30)+
+            ggtitle(paste0(bedfile$V1[b]," ",nobuffer$V2[b],"-",nobuffer$V3[b]))+
+            geom_vline(xintercept = nobuffer$V2[b], color="gray70", size=0.3)+
+            geom_vline(xintercept = nobuffer$V3[b], color="gray70", size=0.3)
+        ggsave(paste0("../Output/CNV/pairComp/PWS_overlap_individual_depth/region_",b,"_",pwslist[j],".png"), width = 12, height=9, dpi=300)
+        }
+
+
+```
+
+
+## 2. Year 2017 population comparison
+
+## 1. PWS between years
+
+### Plot the overlapping regions between population pairs to look for candidate regions  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Year2017 populations
+y17<-c("TB17","PWS17","SS17","BC17","WA17","CA17")
+comb2<-t(combn(y17,2))
+
+
+plots<-list()
+for (c in 2:26){
+    Results<-data.frame()
+    for (i in 1:nrow(comb2)){
+        pop1<-comb2[i,1]
+        pop2<-comb2[i,2]
+        n1<-nrow(pops_info[pops_info$Population.Year==pop1,])
+        n2<-nrow(pops_info[pops_info$Population.Year==pop2,])
+        
+        df1<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop1, "_chr",c,".csv"))
+        df2<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop2, "_chr",c,".csv"))
+        combdf<-cbind(df1[,4:(ncol(df1)-1)],df2[,4:(ncol(df2)-1)])
+        wilcoxResults<-apply(combdf, 1, function(x){ wilcox.test(x[1:n1],x[(n1+1):(n1+n2)]) })
+        sig<-lapply(wilcoxResults,function(x) {x<-unlist(x)
+                                        p<-unname(x[2])
+                                        return(as.numeric(p)) })
+        #add row numbers to find consecutive windows
+        df1$number<-1:nrow(df1)
+        df2$number<-1:nrow(df2)
+        #calculate SD for plotting
+        df1$sd<-apply(df1[,c(4:(n1+3))], 1, sd)
+        df2$sd<-apply(df2[,c(4:(n2+3))], 1, sd)
+        
+        test<-df1[,c("number","V1","V2","V3")]    
+        test$p.value<-unlist(sig)
+        test<-test[test$p.value<=0.01,]
+        re1<-merge(test, df1[,c("number","V1","V2","V3","mean","sd")])
+        re2<-merge(test, df2[,c("number","V1","V2","V3","mean","sd")])
+        re1$pop<-pop1
+        re2$pop<-pop2
+        results<-rbind(re1,re2)
+        
+        # Find consecutive windows
+        re1<-re1[order(re1$number),]
+        breaks<-c(0, which(diff(re1$number) != 1),length(re1$number))
+        runpos<-sapply(seq(length(breaks)-1),
+               function(x) re1$number[(breaks[x]+1):breaks[x+1]])
+        runpos3<-Filter(function(x) any(length(unlist(x))>=5), runpos)
+        
+        # filter the results to only consecutive positions
+        if(length(runpos3)>0){
+            positions<-unlist(runpos3)
+            results<-results[results$number %in% positions,]
+            results$comp<-paste0(pop1,"_",pop2)
+            Results<-rbind(Results, results)
+        }
+       }
+    write.csv(Results, paste0("../Output/CNV/pairComp/Y2017/runOver5k.Y17.chr",c,".csv"))
+
+    
+    ovlap<-as.data.frame.matrix(table(Results$number, Results$comp))
+    ovlap<-ovlap/2
+    ovlap$sum<-rowSums(ovlap)
+    ovlap<-ovlap[ovlap$sum>=2,]
+    ovlap$number<-as.integer(rownames(ovlap))
+    
+    ovlap<-merge(ovlap, re1[,c("number","V2")], by="number")
+    write.csv(ovlap,paste0("../Output/CNV/pairComp/Y2017/Overlapping.positions.Y17.runOver5k.chr",c,".csv"))
+    
+    plots[[c]]<-ggplot(ovlap, aes(x=V2, y=sum))+
+        geom_point(size=0.6, color="steelblue")+
+        ggtitle(paste0("Chr",c))+
+        xlab("")+ylab("No. of population pairs")+
+        scale_y_continuous(breaks = seq(2, max(ovlap$sum), by = 1))+
+            theme_light()+
+        scale_x_continuous(breaks=seq(0, max(re1$V2), by=5000000), labels=comma)+
+        theme(panel.grid.minor.y=element_blank())
+}
+
+
+ {pdf(paste0("../Output/CNV/pairComp/Y2017/overlapping_windows_Y2017.pdf"), width = 12, height = 30)
+        do.call(grid.arrange, c(plots, ncol=1))
+        dev.off()}
+        
+```
+
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# Year2017 populations
+y17<-c("TB17","PWS17","SS17","BC17","WA17","CA17")
+comb2<-t(combn(y17,2))
+
+#look at some regions from PWS overlaps　(especially chr9 with a high coverage region)
+#create a slurm script file to extract regions to visualize
+
+sink("../Data/Slurmscripts/Extract_Depth_Y17.sh")
+cat("#!/bin/bash -l")
+cat("\n")
+cat(paste0("#SBATCH --job-name=DepthY17 \n"))
+cat(paste0("#SBATCH --mem=16G \n")) 
+cat(paste0("#SBATCH --ntasks=1 \n")) 
+cat(paste0("#SBATCH -e Extract_Depth1.err  \n"))
+cat(paste0("#SBATCH --time=144:00:00  \n"))
+cat(paste0("#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc \n"))
+cat(paste0("#SBATCH --mail-type=ALL \n"))
+cat(paste0("#SBATCH -p high  \n"))
+cat("\n\n")
+cat("module load samtools \n") 
+
+for (j in 1: length(y17)){
+    pop<-y17[j]
+    samples<-pops_info$Sample[pops_info$Population.Year==pop]
+    for (i in 1:40){
+        cat(paste0("samtools depth -b /home/ktist/ph/data/bam_depth/Overlaps_reads.bed /home/ktist/ph/data/bam/", samples[i],"_sorted.bam > /home/ktist/ph/data/bam_depth/Y17/",samples[i],"_overlaps.txt \n"))
+    cat(paste0("gzip /home/ktist/ph/data/bam_depth/Y17/",samples[i],"_overlaps.txt \n"))
+    }
+}
+sink(NULL)
+
+
+
+#nobuffer<-read.table("../Output/CNV/pairComp/PWS_4overlap_regions_noBuffer.bed", sep="\t")
+bed<-read.table("../Data/Slurmscripts/Overlaps_reads.bed", sep="\t")
+
+totalreads<-read.csv("../Output/CNV/rawReadTotalCount_perSample.csv")
+min(totalreads$rawTotal)
+meanTotal<-aggregate(totalreads$rawTotal, by=list(totalreads$pop), mean)
+for (j in 1:length(y17)){
+    plist<-pops_info$Sample[pops_info$Population.Year==y17[j]]
+    depthlist<-list()
+    for (i in 1:10){
+        df<-fread(paste0("../Data/bam_depth/PWS_overlap/Y17/",plist[i],"_overlaps.txt.gz"))
+        total<-totalreads$rawTotal[totalreads$sample==plist[i]]
+        df$V3<-df$V3/total*10000000
+        reads<-list()
+        for (b in 1: nrow(bed)){
+            dp<-df[V1==bed$V1[b]& V2>=bed$V2[b] & V2<= bed$V3[b]]
+            
+            dp$sample<-plist[i]
+            reads[[b]]<-dp
+        }
+        depthlist[[i]]<-reads
+        names(depthlist)[i]<-plist[i]
+    }
+    #saveRDS(depth_list,file=paste0("../Output/CNV/pairComp/PWS_overlap_individual_depth/", pwslist[j],"_depths.RData"))
+    
+    #for (b in 2: nrow(bed)){
+    for (b in 7:7)
+        data<-lapply(depthlist, '[[', b)
+        depths<-do.call(rbind,data)
+        #ymax<-ifelse(b==7|b==6, 60, 30)
+        ggplot(depths, aes(x=V2, y=V3))+
+            facet_wrap(~sample, ncol=4)+
+            geom_point(size=0.3, alpha=0.4, color="#0096FF")+
+            ylab("Read depth")+xlab("")+theme_bw()+
+            theme(panel.grid = element_blank())+ylim(0,70)+
+            ggtitle(paste0(bed$V1[b]," ",bed$V2[b],"-",bed$V3[b]))
+            #geom_vline(xintercept = nobuffer$V2[b], color="gray70", size=0.3)+
+            #geom_vline(xintercept = nobuffer$V3[b], color="gray70", size=0.3)
+        ggsave(paste0("../Output/CNV/pairComp/PWS_overlap_individual_depth/Y17_region",b,".norm10.",y17[j],".png"), width = 12, height=7, dpi=300)
+        }
+    }
+    
+        
+}
+
+
+for (c in 1:26){
+    df1<-read.csv(paste0("../Output/CNV/pairComp/Y2017/runOver5k.Y17.chr",c,".csv"))
+    ov<-read.csv(paste0("../Output/CNV/pairComp/Y2017/Overlapping.positions.Y17.runOver5k.chr",c,".csv"))
+    df<-df1[df1$number %in% ov$number,]
+    ggplot(df, aes(x=V2, y=mean, color=pop))+
+        geom_point(size=0.6, position=position_dodge(width = 100000), alpha=0.5)+
+        geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd),position=position_dodge(width = 100000), width=10, size=0.2)+
+        ggtitle(paste0("Chr ",c))+
+        xlab("")+ylab("normalized mean read count per 1k window")+
+        theme(legend.title = element_blank())+xlim(0,chsize$V3[c])+
+        theme_bw()
+    ggsave(paste0("../Output/CNV/pairComp/Y2017/Overlapping_sites_chr",c,".png"), width = 13, height=3, dpi=300)
+}
+
+for (i in 1:nrow(comb2)){
+    pop1<-comb2[i,1]
+    pop2<-comb2[i,2]
+    n1<-nrow(pops_info[pops_info$Population.Year==pop1,])
+    n2<-nrow(pops_info[pops_info$Population.Year==pop2,])
+    for (c in 1:26){
+        df1<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop1, "_chr",c,".csv"))
+        df2<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop2, "_chr",c,".csv"))
+        combdf<-cbind(df1[,4:(ncol(df1)-1)],df2[,4:(ncol(df2)-1)])
+        wilcoxResults<-apply(combdf, 1, function(x){ wilcox.test(x[1:n1],x[(n1+1):(n1+n2)]) })
+        sig<-lapply(wilcoxResults,function(x) {x<-unlist(x)
+                                        p<-unname(x[2])
+                                        return(as.numeric(p)) })
+        #add row numbers to find consecutive windows
+        df1$number<-1:nrow(df1)
+        df2$number<-1:nrow(df2)
+        #calculate SD for plotting
+        df1$sd<-apply(df1[,c(4:(n1+3))], 1, sd)
+        df2$sd<-apply(df2[,c(4:(n2+3))], 1, sd)
+        
+        test<-df1[,c("number","V1","V2","V3")]    
+        test$p.value<-unlist(sig)
+        test<-test[test$p.value<=0.01,]
+        re1<-merge(test, df1[,c("number","V1","V2","V3","mean","sd")])
+        re2<-merge(test, df2[,c("number","V1","V2","V3","mean","sd")])
+        re1$pop<-pop1
+        re2$pop<-pop2
+        results<-rbind(re1,re2)
+        
+        # Find consecutive windows
+        re1<-re1[order(re1$number),]
+        breaks<-c(0, which(diff(re1$number) != 1),length(re1$number))
+        runpos<-sapply(seq(length(breaks)-1),
+               function(x) re1$number[(breaks[x]+1):breaks[x+1]])
+        runpos3<-Filter(function(x) any(length(unlist(x))>=3), runpos)
+        saveRDS(runpos3,file=paste0("../Output/CNV/pairComp/chr",c,"_",pop1,".",pop2,"_consecutiveWindows.RData"))
+        # filter the results to only consective positions
+        positions<-unlist(runpos3)
+        results<-results[results$number %in% positions,]
+        
+        plots<-list()
+        plots[[1]]<-ggplot(results[results$V3<=10000000,], aes(x=V2, y=mean, color=pop))+
+            geom_point(size=0.6, position=position_dodge(width = 0.6))+
+            geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd),position=position_dodge(width = 0.6), width=0.3, size=0.2)+
+            ggtitle(paste0("Chr",c))+
+            xlab("")+ylab("normalized mean read count per 1k")+
+            theme(legend.title = element_blank())+
+            theme_bw()
+        plots[[2]]<-ggplot(results[results$V3<=20000000&results$V3>10000000,], aes(x=V2, y=mean, color=pop))+
+            geom_point(size=0.6, position=position_dodge(width = 0.5))+
+            geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd),position=position_dodge(width = 0.5), width=0.2, size=0.2)+
+            ggtitle(paste0("Chr",c))+
+            xlab("")+ylab("normalized mean read count per 1k")+
+            theme(legend.title = element_blank())+
+            theme_bw()
+        plots[[3]]<-ggplot(results[results$V3>20000000,], aes(x=V2, y=mean, color=pop))+
+            geom_point(size=0.6, position=position_dodge(width = 0.5))+
+            geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd),position=position_dodge(width = 0.5), width=0.2, size=0.2)+
+            ggtitle(paste0("Chr",c))+
+            xlab("")+ylab("normalized mean read count per 1k")+
+            theme(legend.title = element_blank())+
+            theme_bw()
+     
+        {pdf(paste0("../Output/CNV/pairComp/Y17/",pop1,".",pop2,"_chr",c,".pdf"), width = 12, height = 12)
+        do.call(grid.arrange, c(plots, ncol=1))
+        dev.off()}
+        
+        
+    }
+}
+
+
+
+```
+
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#plotting 
+
+for (i in 1:nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    n1<-ncol(df1)-4
+    n2<-ncol(df2)-4
+    for (c in 1:26){
+        df1<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop1, "_chr",c,".csv"))
+        df2<-read.csv(paste0("../Output/CNV/ReadNumber_normalized_",pop2, "_chr",c,".csv"))
+        combdf<-cbind(df1[,4:(ncol(df1)-1)],df2[,4:(ncol(df2)-1)])
+        wilcoxResults<-apply(combdf, 1, function(x){ wilcox.test(x[1:n1],x[(n1+1):(n1+n2)]) })
+        sig<-lapply(wilcoxResults,function(x) {x<-unlist(x)
+                                        p<-unname(x[2])
+                                        return(as.numeric(p)) })
+        
+        df1$number<-1:nrow(df1)
+        df2$number<-1:nrow(df2)
+        test<-df1[,c("number","V1","V2","V3")]    
+        test$p.value<-unlist(sig)
+        test<-test[test$p.value<=0.01,]
+        df1$sd<-apply(df1[,c(4:(ncol(df1)-1))], 1, sd)
+        df2$sd<-apply(df2[,c(4:(ncol(df2)-1))], 1, sd)
+        re1<-merge(test, df1[,c("number","V1","V2","V3","mean","sd")])
+        re2<-merge(test, df2[,c("number","V1","V2","V3","mean","sd")])
+        re1$pop<-pop1
+        re2$pop<-pop2
+        results<-rbind(re1,re2)
+        
+          
+        plots<-list()
+        plots[[1]]<-ggplot(results[results$V3<=10000000,], aes(x=V2, y=mean, color=pop))+
+            geom_point(size=0.6, position=position_dodge(width = 0.5))+
+            geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd),position=position_dodge(width = 0.5), width=0.2, size=0.2)+
+            ggtitle(paste0("Chr",c))+
+            xlab("")+ylab("normalized mean read count per 1k")+
+            theme(legend.title = element_blank())+
+            theme_bw()
+        plots[[2]]<-ggplot(results[results$V3<=20000000&results$V3>10000000,], aes(x=V2, y=mean, color=pop))+
+            geom_point(size=0.6, position=position_dodge(width = 0.5))+
+            geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd),position=position_dodge(width = 0.5), width=0.2, size=0.2)+
+            ggtitle(paste0("Chr",c))+
+            xlab("")+ylab("normalized mean read count per 1k")+
+            theme(legend.title = element_blank())+
+            theme_bw()+ylab(0,)
+        plots[[3]]<-ggplot(results[results$V3>20000000,], aes(x=V2, y=mean, color=pop))+
+            geom_point(size=0.6, position=position_dodge(width = 0.5))+
+            geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd),position=position_dodge(width = 0.5), width=0.2, size=0.2)+
+            ggtitle(paste0("Chr",c))+
+            xlab("")+ylab("normalized mean read count per 1k")+
+            theme(legend.title = element_blank())+
+            theme_bw()
+     
+        {pdf(paste0("../Output/CNV/pairComp/",pop1,".",pop2,"_chr",c,".pdf"), width = 12, height = 12)
+        do.call(grid.arrange, c(plots, ncol=1))
+        dev.off()}
+        
+    }
+}
+        
+    
+
+
+
+```
+
+
+
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+```
+

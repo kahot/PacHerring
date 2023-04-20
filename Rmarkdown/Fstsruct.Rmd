@@ -96,13 +96,28 @@ dev.off()
 allpops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
 
 Qs<-list() #Qmatrix
+#Replace 0.000000001 with zero
 for (i in 1: length(allpops)){
     df<-qmat[qmat$Population.Year==allpops[i],]
     q<-df[,c(1,2,5:7)]
     colnames(q)[1:2]<-c("ind","pop")
+    
+    #if (i %in% 1:4){
+    #    for (j in 1:nrow(q)){
+    #        if(q$q2[j]>=.99999999) {
+    #            q$q1[j]=1
+    #            q$q1[j]=0
+    #            q$q3[j]=0
+    #        }
+    #    }
+    #}
+
     Qs[[i]]<-q
     names(Qs)[i]<-allpops[i]
 }        
+
+
+
 
 qmat2<-qmat[,c(1,2,5:7)] 
 colnames(qmat2)<-c("ind","pop","q1","q2","q3")
@@ -132,15 +147,51 @@ for(i in 2:length(allpops)){
 Q_plot(Q = qmat_sorted,,K=3)+
             ggplot2::scale_fill_manual(values=cols3)+
             ggplot2::scale_color_manual(values=cols3)+
-    #ggplot2::geom_vline(xintercept = nind$n[1:13]+0.5, color="gray", size=0.3)+
-
-    ggplot2::scale_x_continuous(labels=allpops, breaks=nind$mid)+
+   ggplot2::scale_x_continuous(labels=allpops, breaks=nind$mid)+
     theme_minimal()+xlab('')+ylab('')+ylim(0,1)+
     theme(panel.grid=element_blank(), legend.position = "none", axis.text.x = element_text(size=8))+
     ggplot2::annotate('segment', x=nind$n[1:13]+0.5,y=rep(0, times=13),yend=rep(1, times=13), xend=nind$n[1:13]+0.5, color="gray30", size=0.3)
 ggsave('../Output/fstruct/Allpop_FSTruct_plot2.png', width = 8, height = 3.5, dpi=300)
 
- #calculate stats
+
+# population colors that match other figures
+"#56b4e9" "#cc79a7" "#009e73" "#0072b2" "#d55e00" "#e69f00" "#f0e442"
+ "#8dd3c7" "#ffffb3" "#bebada"
+
+newcols<-c("#e69f00","#56b4e9", "#cc79a7") 
+Q_plot(Q = qmat_sorted,,K=3)+
+            ggplot2::scale_fill_manual(values=newcols)+
+            ggplot2::scale_color_manual(values=newcols)+
+   ggplot2::scale_x_continuous(labels=allpops, breaks=nind$mid)+
+    theme_minimal()+xlab('')+ylab('')+ylim(0,1)+
+    theme(panel.grid=element_blank(), legend.position = "none", axis.text.x = element_text(size=8))+
+    ggplot2::annotate('segment', x=nind$n[1:13]+0.5,y=rep(0, times=13),yend=rep(1, times=13), xend=nind$n[1:13]+0.5, color="gray30", size=0.3)
+ggsave('../Output/fstruct/Allpop_FSTruct_plot_colormatch.png', width = 8, height = 3.5, dpi=300)
+
+
+
+
+#calculate stats
+
+boots1 <- Q_bootstrap(matrices = Qs, 
+                             n_replicates = 100,
+                             K = 3, 
+                             seed = 1)
+
+wilcox1<-boots1$test_pairwise_wilcox[['p.value']]
+write.csv(wilcox1, "../Output/fstruct/Wilcoxton_test_results_allPops.csv")
+
+#create color vectors
+cols14<-c("#bdd7e7","#6baed6","#3182bd","#08519c","#d7b5d8","#df65b0","#dd1c77","#980043","#bae4b3","#74c476","#31a354",  "#d55e00","#0072b2","#e69f00")
+png("Output/fstruct/Allpops_stats.png", width=10, height=7, unit='in', res=300)
+
+cowplot::plot_grid(boots1$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2::scale_x_discrete(labels=allpops), 
+                       boots1$plot_violin + ggplot2::ggtitle("Violin Plot")+ggplot2::scale_x_discrete(labels=allpops), 
+                       boots1$plot_ecdf + ggplot2::ggtitle("ECDF Plot") +
+                           ggplot2::scale_color_manual(values=cols14, labels=allpops), 
+                       nrow = 2)
+dev.off()
+
 # remove TB pops
 bootstrap <- Q_bootstrap(matrices = Qs[5:14], 
                              n_replicates = 100,
@@ -153,11 +204,57 @@ cowplot::plot_grid(bootstrap$plot_boxplot + ggplot2::ggtitle("Box Plot")+ggplot2
                            ggplot2::scale_color_brewer(palette = "Dark2", labels=allpops[5:14]), 
                        nrow = 2)
 dev.off()
+
+bootstrap$test_pairwise_wilcox
+#
+#      PWS91   PWS96   PWS07   PWS17   SS96    SS06    SS17    BC17    WA17   
+#PWS96 5.2e-05 -       -       -       -       -       -       -       -      
+#PWS07 0.00437 < 2e-16 -       -       -       -       -       -       -      
+#PWS17 1.00000 1.1e-05 2.5e-08 -       -       -       -       -       -      
+#SS96  1.00000 9.3e-08 0.00020 1.00000 -       -       -       -       -      
+#SS06  1.00000 1.9e-09 0.00070 0.81358 1.00000 -       -       -       -      
+#SS17  1.00000 1.8e-13 0.00437 0.02110 1.00000 1.00000 -       -       -      
+#BC17  1.00000 3.8e-09 2.4e-08 1.00000 1.00000 1.00000 0.08232 -       -      
+#WA17  0.00144 1.00000 3.8e-15 0.00443 0.00012 1.1e-05 4.1e-08 0.00025 -      
+#CA17  < 2e-16 < 2e-16 < 2e-16 < 2e-16 < 2e-16 < 2e-16 < 2e-16 < 2e-16 < 2e-16
+
+wilcox2<-bootstrap$test_pairwise_wilcox[['p.value']]
+write.csv(wilcox2,"../Output/fstruct/Wilcoxton_test_results_noTB.csv")
+
+wil2<-melt(wilcox2)
+
+wil2$Var1<-factor(wil2$Var1, levels=allpops)
+wil2$Var2<-factor(wil2$Var2, levels=allpops)
+
+wil2$color<-'a'
+wil2$color[wil2$value<0.05]<-'b'
+wil2$value<-round(wil2$value, 5)
+
+ scale_fill_gradientn(colors=c("white","hotpink3"),values = c(1.0,0.05,0),na.value="gray90", 
+                         name="P-value")
+
+
+ggplot(wil2, aes(Var1, Var2, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradientn(colors=c("white","hotpink3"),values = c(1.0,0.05,0),na.value="gray90", 
+                         name="P-value")+
+    theme_minimal()+ xlab("")+ylab("")+
+    coord_fixed()+
+    geom_text(aes(Var1, Var2, label = value), color = "black", size = 3)
+
+
+ggsave("../Output/fstruct/wilcox_test_results_pvalues.png", width = 6, height=5.5, dpi=300)
+
+
 ```
 ![](../Output/fstruct/Allpop_FSTruct_plot2.png)
 
+![](../Output/fstruct/Allpop_FSTruct_plot_colormatch.png)
 
 ![](../Output/fstruct/Allpops_stats_noTB.png)
+
+![](../Output/fstruct/wilcox_test_results_pvalues.png)
+
 
 * TB is excluded as it is mostly consisted of 1 pedigree, and the numbers comes out weird.
 
@@ -165,6 +262,28 @@ dev.off()
 * Sitka Sound population is more stable over time than PWS. PWS population appeared to have gone through fluctuations 
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
+wil1<-melt(wilcox1)
+
+wil1$Var1<-factor(wil1$Var1, levels=allpops)
+wil1$Var2<-factor(wil1$Var2, levels=allpops)
+
+wil1$color<-'a'
+wil1$color[wil1$value<0.05]<-'b'
+wil1$value<-round(wil1$value, 5)
+
+ggplot(wil1, aes(Var1, Var2, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradientn(colors=c("white","hotpink3"),values = c(1.0,0.05,0),na.value="gray90", 
+                         name="P-value")+
+    theme_minimal()+ xlab("")+ylab("")+
+    coord_fixed()+
+    geom_text(aes(Var1, Var2, label = value), color = "black", size = 3)
+
+
+ggsave("../Output/fstruct/wilcox_test_results_pvalues_all.png", width = 8.5, height=7, dpi=300)
+
+
+
 ```
 
 

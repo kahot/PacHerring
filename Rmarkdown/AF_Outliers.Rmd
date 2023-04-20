@@ -1,0 +1,305 @@
+---
+title: "AF"
+output: html_notebook
+---
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+require(data.table)
+require(plyr)
+require(RColorBrewer)
+library(poolSeq)
+```
+
+### 1. Read the mafs data from ANGSD
+Starting with PWS pop  
+```{r eval=FALSE}
+#MAF data
+dat91<-fread("../Data/new_vcf/AF/PWS91.mafs.gz")
+dat96<-fread("../Data/new_vcf/AF/PWS96.mafs.gz")
+dat07<-fread("../Data/new_vcf/AF/PWS07.mafs.gz")
+dat17<-fread("../Data/new_vcf/AF/PWS17.mafs.gz")
+setkey(dat91, chromo, position)
+setkey(dat96, chromo, position)
+setkey(dat07, chromo, position)
+setkey(dat17, chromo, position)
+```
+
+
+## 2. Outlier Regions
+```{r eval=FALSE}
+
+#COV12 Outlier regions of PWS
+out12<-read.csv("../Output/COV/COVscan_3pop/cutoff/3pops_top1percent_outlier_cutoffPWS.cov12.csv")
+out12<-out12[out12$pop=="PWS",]   
+#72 regions
+out23<-read.csv("../Output/COV/COVscan_3pop/cutoff/3pops_top1percent_outlier_cutoffPWS.cov23.csv")
+out23<-out12[out12$pop=="PWS",]   
+#73 regions
+
+
+#AF files for all pops
+MAF<-list()
+pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+for (i in 1:length(pops)){
+    dat<-fread(paste0("../Data/new_vcf/AF/",pops[i],".mafs.gz"))
+    setkey(dat, chromo, position)
+    MAF[[i]]<-dat
+    names(MAF)[i]<-pops[i]
+}
+
+for (i in 1:nrow(out12)){
+    ch<-out12$chrom[i]
+    str<-out12$start[i] #-100000
+    end<-out12$end[i]#+100000
+    AF<-data.frame()
+    for (j in 1:length(pops)){
+        df<-MAF[[j]]
+        af<-df[df$chromo==ch &df$position>=str &df$position<=end,]
+        af$pop<-names(MAF)[j]
+        af<-af[,c("chromo","position","knownEM","pop")]
+         AF<-rbind(AF,af)
+    }
+    AF$pop<-factor(AF$pop, levels=pops)
+    
+    ggplot(AF, aes(x=position, y=knownEM))+
+        facet_wrap(~pop)+
+        geom_point(size=0.6, color=cols[1])
+    ggsave(paste0("../Output/COV/COVscan_3pop/cutoff/AF",i,"_all.png"), width = 10, height = 8, dpi=300)
+    
+    pops17<-pops[grep("17",pops)]
+    AF2<-AF[AF$pop %in% pops17,]
+    ggplot(AF2, aes(x=position, y=knownEM))+
+        facet_wrap(~pop)+
+        geom_point(size=0.6, color=cols[1])
+    ggsave(paste0("../Output/COV/COVscan_3pop/cutoff/AF",i,"_2017.png"), width = 6, height = 4, dpi=300)
+    
+    AF4<-AF[AF$pop %in% c("PWS91","PWS96","PWS07","PWS17"),]
+    ggplot(AF4, aes(x=position, y=knownEM))+
+        facet_wrap(~pop, ncol = 1)+
+        geom_point(size=0.6, color=cols[1])
+    ggsave(paste0("../Output/COV/COVscan_3pop/cutoff/AF",i,"_PWS.png"), width = 3, height = 6, dpi=300)
+}
+ 
+
+for (i in 1:nrow(out23)){
+    ch<- out23$chrom[i]
+    str<-out23$start[i] #-100000
+    end<-out23$end[i]#+100000
+    AF<-data.frame()
+    for (j in 1:length(pops)){
+        df<-MAF[[j]]
+        af<-df[df$chromo==ch &df$position>=str &df$position<=end,]
+        af$pop<-names(MAF)[j]
+        af<-af[,c("chromo","position","knownEM","pop")]
+         AF<-rbind(AF,af)
+    }
+    AF$pop<-factor(AF$pop, levels=pops)
+    
+    ggplot(AF, aes(x=position, y=knownEM))+
+        facet_wrap(~pop)+
+        geom_point(size=0.6, color=cols[1])
+    ggsave(paste0("../Output/COV/COVscan_3pop/cutoff/AF",i,"_cov23_all.png"), width = 10, height = 8, dpi=300)
+    
+    pops17<-pops[grep("17",pops)]
+    AF2<-AF[AF$pop %in% pops17,]
+    ggplot(AF2, aes(x=position, y=knownEM))+
+        facet_wrap(~pop)+
+        geom_point(size=0.6, color=cols[1])
+    ggsave(paste0("../Output/COV/COVscan_3pop/cutoff/AF",i,"_cov23_2017.png"), width = 6, height = 4, dpi=300)
+    
+    AF4<-AF[AF$pop %in% c("PWS91","PWS96","PWS07","PWS17"),]
+    ggplot(AF4, aes(x=position, y=knownEM))+
+        facet_wrap(~pop, ncol = 1)+
+        geom_point(size=0.6, color=cols[1])
+    ggsave(paste0("../Output/COV/COVscan_3pop/cutoff/AF",i,"_cov23_PWS.png"), width = 3, height = 6, dpi=300)
+}
+
+
+   ggplot(AF, aes(x=position, y=knownEM, color=factor(year)))+
+        geom_point()
+        #geom_path()+ggtitle("MAF (vcftools)")+
+    theme(legend.title=element_blank())
+ggsave("../Output/COV/COVscan/AF_ch13_23.07-23.08.png", width = 5, height=3, dpi=300)
+}
+ggplot(AF, aes(x=year, y=maf, color=factor(pos)))+
+    geom_point()+
+    geom_path()+ggtitle("MAF (vcftools)")+
+    theme(legend.title=element_blank())
+ggsave("../Output/COV/COVscan/AF_ch13_23.07-23.08.png", width = 5, height=3, dpi=300)
+
+```
+
+
+
+years<-c("91","96","07","17")
+comb<-t(combn(years, 2))
+
+estNe<-data.frame(pop1=comb[,1], pop2=comb[,2])
+
+#Generation time (G) = 2.35 and 3.5
+years<-c(1991,1996,2006,2017)
+yr_comb<-data.frame(t(combn(years, 2)))
+yrs<-yr_comb$X2-yr_comb$X1
+gens1<-yrs/2.35
+gens2<-yrs/3
+
+for (i in 2: nrow(comb)){
+    df1<-get(paste0("dat",comb[i,1]))
+    df2<-get(paste0("dat",comb[i,2]))
+    
+    setnames(df1, c("knownEM", 'nInd'), c("freq1", 'nInd1'))
+    setnames(df2, c("knownEM", 'nInd'), c("freq2", 'nInd2'))
+    
+    df <- df1[df2, .(chromo, position, freq1, freq2, nInd1, nInd2)][!is.na(freq1) & !is.na(freq2) & freq1 > 0.1 & freq2 > 0.1, ]
+    g1=gens1[i]
+    g2=gens2[i]
+    
+    estNe$Ne1[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g1)] 
+    estNe$Ne2[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g2)] 
+    
+    # block bootstrapping across LGs
+    uq.ch <- df[, sort(unique(chromo))]
+
+    boot.re1 <- boot(uq.ch, jrNe2block, 1000, gen = g1, alldata = df)
+    boot.re2 <- boot(uq.ch, jrNe2block, 1000, gen = g2, alldata = df)
+    
+    estNe$median1[i]<-median(boot.re1$t[is.finite(boot.re1$t)]) # median bootstrap
+    estNe$median2[i]<-median(boot.re2$t[is.finite(boot.re2$t)]) # median bootstrap
+    
+    estNe$mean1[i]<-mean(boot.re1$t[is.finite(boot.re1$t)])
+    estNe$mean2[i]<-mean(boot.re2$t[is.finite(boot.re2$t)])
+    
+    ci1<-boot.ci(boot.re1, type = c('perc'))
+    ci2<-boot.ci(boot.re2, type = c('perc'))
+    
+    #95% C.I.
+    estNe$CI.low1[i]<-ci1$percent[4]
+    estNe$CI.up1[i]<-ci1$percent[5]
+    
+    estNe$CI.low2[i]<-ci2$percent[4]
+    estNe$CI.up2[i]<-ci2$percent[5]
+    
+    
+    #reset the attibutes
+    setnames(df1, c("freq1", 'nInd1'),c("knownEM", 'nInd'))
+    setnames(df2, c("freq2", 'nInd2'),c("knownEM", 'nInd'))
+}
+
+write.csv(estNe,"../Output/Ne/Jorde-Ryman_Ne.estimates_PWS_G3.csv")
+
+#estNe<-read.csv("../Output/Ne/Jorde-Ryman_Ne.estimates_PWS_G.csv", row.names = 1)
+estNe$year<-apply(estNe["pop2"],1, function(x) {if (x=="96") x=1996
+                   else if (x=="07") x=2007
+                   else if (x=="17") x=2017})
+#G=2.35 (Ne1)
+ggplot(estNe[c(1,4,6),], aes(x=year, y=Ne1))+
+    geom_point(size=2, color="blue")+
+    geom_errorbar(aes(ymin = CI.low1, ymax = CI.up1), width = 0.2, color="blue")+
+    geom_path(color="blue")+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+ggtitle("PWS")
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates_PWS_G2.35.png", width = 5, height = 3, dpi=300)
+
+ggplot(estNe[c(1,4,6),], aes(x=year, y=Ne2))+
+    geom_point(size=2, color="blue")+
+    geom_errorbar(aes(ymin = CI.low2, ymax = CI.up2), width = 0.2, color="blue")+
+    geom_path(color="blue")+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+ggtitle("PWS")
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates_PWS_G3.png", width = 5, height = 3, dpi=300)
+
+
+```
+
+```{r}
+knitr::kable(estNe)
+```
+
+
+![](../Output/Ne/Jorde-Ryman_Ne.estimates.png){width=60%}
+
+* TB pop  
+
+```{r eval=FALSE}
+#MAF data
+dat91<-fread("../Data/new_vcf/AF/TB91.mafs.gz")
+dat96<-fread("../Data/new_vcf/AF/TB96.mafs.gz")
+dat06<-fread("../Data/new_vcf/AF/TB06.mafs.gz")
+dat17<-fread("../Data/new_vcf/AF/TB17.mafs.gz")
+setkey(dat91, chromo, position)
+setkey(dat96, chromo, position)
+setkey(dat06, chromo, position)
+setkey(dat17, chromo, position)
+
+# unlinked loci from plink
+unlnk<-fread('../Data/plink/prune/prune_50.5.0.5.prune.in')
+setnames(unlnk, c("chromo","position"))
+
+dat91<-merge(dat91, unlnk)
+dat96<-merge(dat96, unlnk)
+dat06<-merge(dat06, unlnk)
+dat17<-merge(dat17, unlnk)
+
+years<-c("91","96","06","17")
+comb<-t(combn(years, 2))
+estNe<-data.frame(pop1=comb[,1], pop2=comb[,2])
+
+years<-c(1991,1996,2006,2017)
+yr_comb<-data.frame(t(combn(years, 2)))
+yrs<-yr_comb$X2-yr_comb$X1
+#gens1<-yrs/2.35
+gens<-yrs/3
+
+for (i in 1: nrow(comb)){
+    df1<-get(paste0("dat",comb[i,1]))
+    df2<-get(paste0("dat",comb[i,2]))
+    
+    setnames(df1, c("knownEM", 'nInd'), c("freq1", 'nInd1'))
+    setnames(df2, c("knownEM", 'nInd'), c("freq2", 'nInd2'))
+    
+    df <- df1[df2, .(chromo, position, freq1, freq2, nInd1, nInd2)][!is.na(freq1) & !is.na(freq2) & freq1 > 0.1 & freq2 > 0.1, ]
+    g=gens[i]
+    
+    estNe$Ne[i]<-df[, jrNe2(freq1, freq2, nInd1, nInd2, g)] 
+
+    # block bootstrapping across LGs
+    uq.ch <- df[, sort(unique(chromo))]
+
+    boot.re <- boot(uq.ch, jrNe2block, 1000, gen = g, alldata = df)
+    estNe$median[i]<-median(boot.re$t[is.finite(boot.re$t)]) # median bootstrap
+    estNe$mean[i]<-mean(boot.re$t[is.finite(boot.re$t)])
+    ci<-boot.ci(boot.re, type = c('perc'))
+    #95% C.I.
+    estNe$CI.low[i]<-ci$percent[4]
+    estNe$CI.up[i]<-ci$percent[5]
+    
+    #reset the attibutes
+    setnames(df1, c("freq1", 'nInd1'),c("knownEM", 'nInd'))
+    setnames(df2, c("freq2", 'nInd2'),c("knownEM", 'nInd'))
+}
+
+write.csv(estNe,"../Output/Ne/Jorde-Ryman_Ne.estimates_TB_G3.csv")
+
+#estNe<-read.csv("../Output/Ne/Jorde-Ryman_Ne.estimates_TB_G3.csv", row.names = 1)
+estNe$year<-apply(estNe["pop2"],1, function(x) {if (x=="96") x=1996
+                   else if (x=="06") x=2006
+                   else if (x=="17") x=2017})
+
+ggplot(estNe[c(1,4,6),], aes(x=year, y=Ne))+
+    geom_point(size=2, color="blue")+
+    geom_errorbar(aes(ymin = CI.low, ymax = CI.up), width = 0.2, color="blue")+
+    geom_path(color="blue")+ylab("Estiamted Ne")+xlab("Year")+
+    theme_classic()+ggtitle("TB")
+ggsave("../Output/Ne/Jorde-Ryman_Ne.estimates_TB_G3.png", width = 5, height = 3, dpi=300)
+
+```
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

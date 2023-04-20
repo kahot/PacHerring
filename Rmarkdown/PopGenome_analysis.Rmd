@@ -10,9 +10,10 @@ title: "Analysis with PopGenome"
 ---
 
 
-```{r}
+```{r eval=FALSE, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(PopGenome)
+
 #this will read all VCF files in the directory
 pws <- readData("../Data/new_vcf/PWS/", format = "VCF", include.unknown = TRUE, FAST = TRUE)
 

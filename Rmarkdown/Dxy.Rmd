@@ -1,0 +1,294 @@
+---
+title: "Dxy"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+
+```
+
+# Create a script to run calcDxy.R for population pairs 
+* Dxy is calculated from maf files from angsd/realSFS
+* Use calcDxy.R to quickly obtain the Dxy for loci in the vcf file and average by the total number of loci in the genome. 
+* Using maf0.05 files, and hence Dxy will likely to be slightly underestimated but the patterns do not change between maf0.01 and maf0.05
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+pwss<-c("PWS91","PWS96","PWS07","PWS17")
+tbs<-c("TB91","TB96","TB06","TB17")
+sss<-c("SS96","SS06","SS17")
+y17<-c("TB17","PWS17","SS17","BC17","WA17","CA17")
+comb1<-combn(pwss, 2)
+comb1<-t(comb1)
+comb2<-combn(tbs, 2)
+comb2<-t(comb2)
+comb3<-combn(sss, 2)
+comb3<-t(comb3)
+comb4<-combn(y17, 2)
+comb4<-data.frame(t(comb4))
+comb<-data.frame(rbind(comb1, comb2, comb3))
+comb$Y2017<-"N"
+comb4$Y2017<-"Y" 
+comb<-rbind(comb, comb4)
+
+sink("Scripts/calculateDxy/run_calcDxy.sh")
+cat("#!/bin/bash \n\n")
+for (i in 1: nrow(comb)){
+    cat(paste0("Rscript calcDxy.R  -p ",comb[i,1]," --popA='",comb[i,1],".mafs' -q ",comb[i,2], " --popB='",comb[i,2],".mafs'\n"))
+    cat(paste0("mv Dxy_persite.txt Dxy_persite_",comb[i,1],"_",comb[i,2],".txt \n"))
+}
+sink(NULL)
+
+```
+
+```{bash eval=FALSE}
+# In the directory ../Scripts/calculateDxy/
+# run with all mafs files saved in the same directory 
+bash run_calcDxy.sh
+
+# the file will run calDxy.R and rename each output accordingly 
+# Output = Dxy_persite_PWS91_PWS96.txt 
+
+```
+
+
+# Calculate the average genome-wide Dxy from the outputs of calcDxy.R  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#total number of loci in the genome
+lens<-read.table("Data/new_vcf/chr_sizes.bed")
+L<-sum(lens$V3) #725670187 bases
+
+pwss<-c("PWS91","PWS96","PWS07","PWS17")
+tbs<-c("TB91","TB96","TB06","TB17")
+sss<-c("SS96","SS06","SS17")
+y17<-c("TB17","PWS17","SS17","BC17","WA17","CA17")
+comb1<-combn(pwss, 2)
+comb1<-t(comb1)
+comb2<-combn(tbs, 2)
+comb2<-t(comb2)
+comb3<-combn(sss, 2)
+comb3<-t(comb3)
+comb4<-combn(y17, 2)
+comb4<-data.frame(t(comb4))
+comb<-data.frame(rbind(comb1, comb2, comb3))
+comb$Y2017<-"N"
+comb4$Y2017<-"Y"
+comb<-rbind(comb, comb4)
+
+dxy<-data.frame(pop1=comb[,1], pop2=comb[,2])
+
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    
+    df<-read.table(paste0("../Scripts/calculateDxy/Dxy_persite_",pop1,"_",pop2,".txt"), header = T)
+    dxy$mean_Dxy[i]<-sum(df$dxy, na.rm=T)/L
+}
+
+write.csv(dxy, "../Output/Dxy/Dxy_from.calcDxy.csv", row.names = F)
+
+```
+
+
+
+# Plot Dxy 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+dxy<-read.csv("../Output/Dxy/Dxy_from.calcDxy.csv")
+
+fst1<-read.csv("../Output/Fst/Mean_Fst_overTime_3pops_allcomp.csv", row.names = 1)
+colnames(fst1)<-c("pop1","pop2","Fst","comp")
+fst_mat<-read.csv("../Output/SFS/Fst_matrix_2017_all.csv")
+melted_cormat <- melt(fst_mat, na.rm = TRUE)
+melted_cormat[melted_cormat==0]<-NA
+f17<-melted_cormat[!is.na(melted_cormat$value),] 
+colnames(f17)<-c("pop1","pop2","Fst")
+f17$comp<-paste0(f17$pop1,"_",f17$pop2)
+fst<-rbind(fst1, f17)
+
+dxy$comp<-paste0(dxy$pop1,"_", dxy$pop2)
+dxy<-merge(dxy, fst[,c("comp","Fst")], )
+
+#Extract years 
+library(plyr)
+require(scales)
+
+dxy$year1<-str_extract(dxy$pop1, "[[:digit:]]+")
+dxy$year2<-str_extract(dxy$pop2, "[[:digit:]]+")
+dxy$year1<-revalue(dxy$year1, c("17"=2017, "07"=2007, "91"=1991,"96"=1996,"06"=2006))
+dxy$year2<-revalue(dxy$year2, c("17"=2017, "07"=2007, "91"=1991,"96"=1996,"06"=2006))
+
+dxy$year1<-as.integer(dxy$year1)
+dxy$year2<-as.integer(dxy$year2)
+
+dxy1<-dxy[dxy$pop1 %in% c(comb1[,1],comb2[,1],comb3[,1]) & dxy$pop2 %in% c(comb1[,2],comb2[,2],comb3[,2]),]
+dxy1$interval<-c(1,2,3,1,1,2,1,1,2,1,2,3,1,1,2)
+dxy1<-dxy1[order(dxy1$year2),]
+
+dxy1$pop<-gsub("\\d\\d", '',dxy1$pop1)
+dxy1$time<-c(1,1,2,"",2,"",2,3,"","",3,"",3,"","")
+dxy1$time<-paste0(paste0(dxy1$year1, "-", dxy1$year2))
+
+ggplot(dxy1, aes(x=year2, y=mean_Dxy, color=pop, shape=factor(interval)))+
+    geom_point(size=3)+
+    geom_path(data=dxy1[dxy1$int==1,], aes(x=year2, y=mean_Dxy))+
+    theme_classic()+
+    ylab("Dxy")+
+    scale_color_manual(values=cols[c(2,3,1)])+
+    labs(shape="Interval", colour="Population")+
+    scale_x_continuous(breaks=c(1996,2006,2017), labels=c("1991-1996","1996-2006","2006-2017"))+
+    scale_y_continuous(labels=comma)
+ggsave("../Output/Dxy/dxy_overtime.png",width=6, height=3.5, dpi=300)
+
+#Y2017
+dxy2<-dxy[dxy$pop1 %in% c(comb4[,1]) & dxy$pop2 %in% c(comb4[,2]),]
+dxy2$pop<-gsub("\\d\\d", '',dxy1$pop1)
+
+ggplot(dxy1, aes(x=year2, y=mean_Dxy, color=pop, shape=factor(interval)))+
+    geom_point(size=3)+
+    geom_path(data=dxy1[dxy1$int==1,], aes(x=year2, y=mean_Dxy))+
+    theme_classic()+
+    ylab("Dxy")+
+    scale_color_manual(values=cols[c(2,3,1)])+
+    labs(shape="Interval", colour="Population")+
+    scale_x_continuous(breaks=c(1996,2006,2017), labels=c("1991-1996","1996-2006","2006-2017"))+
+    scale_y_continuous(labels=comma)
+ggsave("../Output/Dxy/dxy_overtime.png",width=6, height=3.5, dpi=300)
+
+
+```
+![](../Output/Dxy/dxy_overtime.png)  
+
+
+![](../Output/Fst/Fst_overTime_3Pops.png)
+
+
+# Create 50k window average  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+library(windowscanr)
+
+#for (i in 16: nrow(comb)){
+for (i in c(17:28,30)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    
+    df<-read.table(paste0("../Scripts/calculateDxy/Dxy_persite_",pop1,"_",pop2,".txt"), header = T)
+   
+    rol_win <- winScan(x = df, 
+                       groups = "chromo", 
+                       position = "position", 
+                       values = "dxy", 
+                       win_size = 50000,
+                       win_step = 10000,
+                       funs = c("sum"))
+    rol_win$dxy <- rol_win$dxy_sum/50000
+    
+    write.csv(rol_win, paste0("../Output/Dxy/",pop1,"_",pop2,"_Dxy_50kwin_10kstep.csv"))
+}
+```
+
+
+# Plot Fst, Dxy, and Pi together 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+comb<-t(combn(pops,2))
+
+fst<-data.frame()
+for (i in 1: nrow(comb)){
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.delim(paste0("../Data/new_vcf/angsd/fromVCF/2D/fst_",pop1,"_",pop2,"_50kWindow_maf00"))
+    conames<-colnames(df)[2:4]
+    colnames(df)[4]<-"Fst"
+    colnames(df)[1:3]<-conames
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    df$loc<-1:nrow(df)
+    fst<-rbind(fst, df)
+}
+
+dxy<-data.frame()
+for (i in 1:nrow(comb)){ 
+    pop1<-comb[i,1]
+    pop2<-comb[i,2]
+    df<-read.csv(paste0("../Output/Dxy/",pop1,"_",pop2, "_Dxy_50kwin_10kstep.csv"), row.names = 1)
+    df$pop<-paste0(pop1,".vs.",pop2)
+    df$ch=as.integer(gsub("chr","", df$chr))
+    df<-df[order(df$ch),]
+    #df$loc<-1:nrow(df)
+    dxy<-rbind(dxy,df)
+}  
+    
+#pops<-c(pwss,tbs,sss,y17)
+pi<-data.frame()
+for (i in 1:length(pops)){
+    df<-read.csv(paste0('../Output/Pi/',pops[i],'_Pi_pixy_per50kWindow.csv'), row.names = 1)
+    df<-df[,c("Chr","WinCenter","pi" )]
+    df$pop<-pops[i]    
+    pi<-rbind(pi, df)
+}
+    
+
+
+for (c in 1:26){
+    ch<-paste0("chr",c)
+    fst1<-fst[fst$chr==ch,]
+    dxy1<-dxy[dxy$chromo==ch,]
+    pi1<-pi[pi$Chr==ch,]
+
+    for (i in 1:nrow(comb)){
+        pop1<-comb[i,1]
+        pop2<-comb[i,2]
+        pair<-paste0(pop1,".vs.",pop2)
+        fst_pop<-fst1[fst1$pop==pair,]
+        dxy_pop<-dxy1[dxy1$pop==pair,]
+        pi_pop<-pi1[pi1$pop==pop1,]
+        colnames(pi_pop)[3]<-paste0(pop1,"_pi")
+        pi_pop2<-pi1[pi1$pop==pop2,]
+        colnames(pi_pop2)[3]<-paste0(pop2,"_pi")
+        pi_pop<-merge(pi_pop[,1:3], pi_pop2[,2:3], by="WinCenter")
+        stat_pop<-merge(fst_pop[,c("midPos","Fst")], dxy_pop[,c("win_mid", "dxy")], by.x="midPos", by.y= "win_mid")
+        stat_pop<-merge(stat_pop, pi_pop, by.x="midPos", by.y="WinCenter")
+        stat_pop$Pi_diff<-stat_pop[,paste0(pop1,"_pi")]-stat_pop[,paste0(pop2,"_pi")]
+        stat_popm<-melt(stat_pop, id.vars = c("Chr","midPos"), variable.name = "stat")
+        
+        ggplot(stat_popm, aes(midPos/10^6, value, colour = stat)) + geom_line()+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr",c," ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, max(fst1$midPos),1 ))
+        ggsave(paste0("../Output/Dxy/PWS/ANGSD_Diversity_stats_chr",c,"_",pop1," vs.", pop2,".png"), width = 9, height = 5, dpi=150)
+        
+        ggplot(stat_popm, aes(midPos/10^6, value, colour = stat)) +geom_point(color="steelblue", size=0.2, alpha=0.6)+
+            facet_grid(stat~., scales = "free_y")+
+            xlab("Position (Mb)")+ylab('')+
+            theme_light() + theme(legend.position = "none")+ggtitle(paste0("Chr",c," ",pop1," vs.", pop2))+
+            scale_x_continuous(minor_breaks = seq(1, max(fst1$midPos),1 ))
+        ggsave(paste0("../Output/Dxy/PWS/ANGSD_Diversity_stats_chr",c,"_",pop1," vs.", pop2,".png"), width = 9, height = 5, dpi=150)
+    }
+}
+```
+
+
+
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+```
+
+

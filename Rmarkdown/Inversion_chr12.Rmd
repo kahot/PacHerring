@@ -26,7 +26,7 @@ library(ggvenn)
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
 
-pcacols<-c("#fbb4ae","#b3cde3","#ccebc5")
+pcacols<-c('#ffffb3','#8dd3c7','#bebada')
 pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
 pops<-unique(pop_info$Population.Year)
 
@@ -104,13 +104,13 @@ pop.sum2<-pca12.2 %>% count(Group, yr.pop)
 pop.sum2$yr.pop<-factor(pop.sum2$yr.pop, levels=c("TB91","TB96","TB06","TB17"))
 
 g1<-ggplot(data=pop.sum, aes(x=yr.pop, y=n, fill=factor(Group)))+
-    geom_bar(position="fill", stat="identity")+
+    geom_bar(position="fill", stat="identity", color="gray")+
     scale_fill_manual(values=pcacols, guide='none')+
     theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
     xlab("")+
     ggtitle("chr12")
 g2<-ggplot(data=pop.sum2, aes(x=yr.pop, y=n, fill=factor(Group)))+
-    geom_bar(position="fill", stat="identity")+
+    geom_bar(position="fill", stat="identity", color="gray")+
     scale_fill_manual(values=pcacols, labels=c("Group1","Group2","Group3"))+
     theme_linedraw()+theme(legend.title = element_blank())+ylab("")+
     xlab("")+
@@ -123,8 +123,8 @@ full1<-ggdraw()+
 save_plot(filename ="../Output/PCA/ch12_prop_in3groups.png", plot = full1,base_width = 10, base_height = 5, dpi=300)   
 ```
 
-![](../Output/PCA/ch12_prop_in3groups.png) 
 
+![](../Output/PCA/ch12_prop_in3groups.png)
 
 
 ### Compare heterozygosity per region per group per year using bcftools
@@ -148,9 +148,184 @@ bcftools stats -r chr12:17750000-25780000  -s - /home/ktist/ph/data/new_vcf/MD70
 
 pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
 
-popnames<-c("PWS91","PWS96","PWS07","PWS17")
+#popnames<-c("PWS91","PWS96","PWS07","PWS17")
 
 ## Read the stats files and create het summary
+# Calculate Ho and He from bcftools stats output files (stats from PWSonly files)
+sfiles<-list.files("../Data/chr12/", pattern="^PH_chr12.+_stats")
+Het<-data.frame()
+Het_sum<-data.frame()
+for (i in 1:length(sfiles)){
+    df<-read.table(paste0("../Data/chr12/", sfiles[i]), sep="\t", header=F)
+    pname<-gsub("_stats",'',sfiles[i])
+    df<-df[,c(3:6)]
+    colnames(df)<-c("Sample","nRefHom","nNonRefHom","nHets")
+    df$p<-(2*df$nRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$q<-(2*df$nNonRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    
+    df$He<-2*df$p*df$q
+    df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
+
+    #remove TB
+    df1<-df[!grepl("TB",df$Sample),]
+    df1$Group<-"Group1"
+    df1$Group[df1$Sample %in% pca12$Sample[pca12$Group=="Group2"]]<-"Group2"
+    df1$Group[df1$Sample %in% pca12$Sample[pca12$Group=="Group3"]]<-"Group3"
+    #write.csv(df,paste0("../Output/chr12/chr12_Hetero_nonTB_",pname,"_maf05.csv"))
+    df1$region<-gsub("PH_chr12_",'',pname)
+    df1$pop<-"nonTB"
+    Het<-rbind(Het, df1)
+    
+    #TB only
+    df2<-df[grepl("TB",df$Sample),]
+    df2$Group<-"Group1"
+    df2$Group[df2$Sample %in% pca12$Sample[pca12$Group=="TB_Group2"]]<-"Group2"
+    df2$Group[df2$Sample %in% pca12$Sample[pca12$Group=="TB_Group3"]]<-"Group3"
+    #write.csv(df,paste0("../Output/chr12/chr7_Hetero_",pname,"_maf05.csv"))
+    df2$region<-gsub("PH_chr12_",'',pname)
+    df2$pop<-"TB"
+    Het<-rbind(Het, df2)
+    
+    
+    
+    Ho<-aggregate(df1[,"Ho"], by=list(df1$Group), mean )
+    He<-aggregate(df1[,"He"], by=list(df1$Group), mean )
+    het<-cbind(Ho, He$x)
+    colnames(het)<-c("Group","Ho","He")
+    het$region<-gsub("PH_chr12_",'',pname)
+    het$pop<-"nonTB"
+    
+    Ho2<-aggregate(df2[,"Ho"], by=list(df2$Group), mean )
+    He2<-aggregate(df2[,"He"], by=list(df2$Group), mean )
+    het2<-cbind(Ho2, He2$x)
+    colnames(het2)<-c("Group","Ho","He")
+    het2$region<-gsub("PH_chr12_",'',pname)
+    het2$pop<-"TB"
+    Het_sum<-rbind(Het_sum,het)
+    Het_sum<-rbind(Het_sum,het2)
+}
+write.csv(Het_sum, "../Output/chr12/chr12_Heteroz_Inv_summary.csv")
+
+gcols<-c('#ffffb3','#8dd3c7','#bebada')
+
+ggplot()+
+    geom_boxplot(data=Het,aes(x=region, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    facet_wrap(~pop)+
+    geom_point(data=Het_sum, aes(x=region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank(), legend.title = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=c("orange",gcols[2:3]))+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')+
+    scale_x_discrete(labels=c('Inversion',"Non-Inversion"))
+ggsave("../Output/PCA/Chr12_Ho.in.twoRegions.png", width =6, height=3 , dpi=300)
+
+```
+![](../Output/PCA/Chr12_Ho.in.twoRegions.png)  
+
+### Inversion heterozygotes: More common or less common?  
+
+```{r message=FALSE, warning=FALSE,eval=FALSE}
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-unique(pop_info$Population.Year)
+
+c12<-read.csv("../Output/PCA/chr12_PCAgroups.csv")
+
+summary<-data.frame(pop.yr=pops)
+for(i in 1: length(pops)){
+    df<-c12[c12$yr.pop==pops[i],]
+    if(pops[i] %in% c("TB91","TB96","TB06","TB17")){
+        sum<-data.frame(table(df$Group))
+        summary$Group1[i]<-sum$Freq[sum$Var1=="TB_Group1"]
+        summary$Group2[i]<-sum$Freq[sum$Var1=="TB_Group2"]
+        if("TB_Group3" %in% sum$Var1){
+            summary$Group3[i]<-sum$Freq[sum$Var1=="TB_Group3"]
+        }
+        else {summary$Group3[i]<-0}
+    }
+    
+    if(!(pops[i] %in% c("TB91","TB96","TB06","TB17"))){
+        sum<-data.frame(table(df$Group))
+        summary$Group1[i]<-sum$Freq[sum$Var1=="Group1"]
+        summary$Group2[i]<-sum$Freq[sum$Var1=="Group2"]
+        if("Group3" %in% sum$Var1){
+            summary$Group3[i]<-sum$Freq[sum$Var1=="Group3"]
+        }
+        else {summary$Group3[i]<-0}
+    }
+    
+}
+
+summary$p<-(2*summary$Group1+summary$Group2)/(rowSums(summary[c("Group1","Group2","Group3")])*2)
+summary$q<-(2*summary$Group3+summary$Group2)/(rowSums(summary[c("Group1","Group2","Group3")])*2)
+summary$He<-2*summary$p*summary$q
+summary$Ho<-summary$Group2/rowSums(summary[c("Group1","Group2","Group3")])
+
+dfm<-melt(summary[,c("pop.yr","He","Ho")],id.vars="pop.yr")
+
+pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+dfm$pop.yr<-factor(dfm$pop.yr, levels=pops)
+
+ggplot(dfm,aes(x=pop.yr, y=value, fill=variable))+
+    geom_point(position=position_dodge(width=0.01),size=3.5,shape=21, color="gray")+
+    theme_classic()+ylab("Heterozygosity")+xlab('')+
+    theme(legend.title = element_blank(), axis.text.x = element_text(angle=45, hjust=1))+
+    scale_fill_manual(values=c("#7570b3CC","#e7298aCC"))
+ggsave("../Output/chr12/Expected_ovserved_hetero_inversion.png", height = 3.5, width = 6, dpi=300)   
+
+# HWE (X2) test
+summary$N<-rowSums(summary[,2:4])
+summary$Exp.1<-summary$p^2*summary$N
+summary$Exp.2<-summary$p*summary$q*2*summary$N
+summary$Exp.3<-summary$q^2*summary$N
+
+chi<-data.frame(pop=pops)
+for (i in 1: length(pops)){
+    ex<-summary[summary$pop.yr==pops[i],2:4]
+    ex[2,]<-summary[summary$pop.yr==pops[i],10:12]
+    re<-chisq.test(ex)
+    chi$p.value[i]<-re$p.value
+}
+
+#chisqure test results - None are significant
+#     pop   p.value
+#1   TB91 0.8018526
+#2   TB96 0.9566413
+#3   TB06 0.8813503
+#4   TB17 0.9817794
+#5  PWS91 0.9214365
+#6  PWS96 0.9560314
+#7  PWS07 0.9006309
+#8  PWS17 0.8214917
+#9   SS96 0.9854017
+#10  SS06 0.9875778
+#11  SS17 0.9920949
+#12  BC17 0.9504556
+#13  WA17 0.9616764
+#14  CA17 0.7642149
+
+#Aggregated test for all pops
+colSums(summary[,2:4]) 
+#Group1 Group2 Group3 
+#   735    111     46 
+colMeans(summary[,c("p","q")])
+#       p        q 
+#0.891861 0.108139 
+0.891861^2*892 #709.5111
+0.108139^2*892 #10.43109
+2*0.891861*0.108139*892 #172.0578
+chisq.test(c(735,111,46), c(710,172,10))
+#X-squared = 6, df = 4, p-value = 0.1991
+
+```
+![](../Output/chr12/Expected_ovserved_hetero_inversion.png)  
+
+#### -> Chiq-square test results were not significant for any population or all combined.
+
+
+```{r message=FALSE, warning=FALSE,eval=FALSE}
+
+### Heterozygosity in the rest of the chr12
 # Calculate Ho and He from bcftools stats output files (stats from PWSonly files)
 sfiles<-list.files("../Data/chr12/", pattern="_stats")
 Het<-data.frame()
@@ -165,77 +340,31 @@ for (i in 1:length(sfiles)){
     
     df$He<-2*df$p*df$q
     df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
-    
-    #remove the TB
-    df1<-df[!grepl("TB",df$Sample),]
-    df$Group<-"Group1"
-    df$Group[df$Sample %in% gp2$Sample]<-"Group2"
-    df$Group[df$Sample %in% gp3$Sample]<-"Group3"
-    write.csv(df,paste0("../Output/chr12/chr12_Hetero_",pname,"_maf05.csv"))
+    df$pop.yr<-gsub("\\d*\\_", '',df$Sample)
     df$region<-gsub("PH_chr12_",'',pname)
     Het<-rbind(Het, df)
     
-    Ho<-aggregate(df[,"Ho"], by=list(df$Group), mean )
-    He<-aggregate(df[,"He"], by=list(df$Group), mean )
+    Ho<-aggregate(df[,"Ho"], by=list(df$pop.yr), mean )
+    He<-aggregate(df[,"He"], by=list(df$pop.yr), mean )
     het<-cbind(Ho, He$x)
-    colnames(het)<-c("Group","Ho","He")
+    colnames(het)<-c("Pop","Ho","He")
     het$region<-gsub("PH_chr12_",'',pname)
-    
     Het_sum<-rbind(Het_sum,het)
 }
+
+# Non-inversion Chr12: observed heterozygosity
+ggplot(Het[Het$region=="noInversion",], aes(x=p, y=Ho, color=region))+
+    geom_point()+xlab("Major allele freq. (p)")
+
+ggplot(Het, aes(x=q, y=Ho, color=region))+
+    geom_point()
+
 write.csv(Het_sum, "../Output/chr12/chr12_Heteroz_Inv_summary.csv")
 
-gcols<-c("#FB687B","#48ABE3","#75BA76")
 
-
-ggplot()+
-    geom_boxplot(data=Het,aes(x=region, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
-    geom_point(data=Het_sum, aes(x=region, y=Ho, color=Group),position=position_dodge(width =0.8))+
-    theme_minimal()+
-    theme(panel.grid.major.x = element_blank(), legend.title = element_blank())+
-    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
-    scale_color_manual(values=gcols)+
-    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')+
-    scale_x_discrete(labels=c('Inversion',"Non-Inversion"))
-ggsave("../Output/chr12/PWS_Chr12_Ho.in.tworegions.png", width =4.5, height=2.1 , dpi=300)
 
 ```
-![](../Output/chr12/PWS_Chr12_Ho.in.tworegions.png)  
 
-
-```{r echo=FALSE, message=FALSE, warning=FALSE,eval=FALSE}
-#Create a figure
-pops<-c("PWS91","PWS96","PWS07","PWS17","")
-
-Het<-data.frame()
-for (i in 1:length(pops)){
-    df<-read.csv(paste0("../Output/Stats_window/PWSonly_chr15_Heteroz_",pops[i],"_maf05.csv"), row.names = 1)
-    df$window<-as.integer(gsub(paste0(pops[i],"_stats_"),'',df$window_id))
-    df$loc<-"region1"
-    df$loc[df$window>165]<-"region2"
-    df$pop<-pops[i]
-    Het<-rbind(Het,df)    
-}
-
-gcols<-c("#FB687B","#48ABE3","#75BA76")
-Het$pop<-factor(Het$pop, levels=pops)
-#Het_sum<-read.csv("../Output/Stats_window/PWSonly_chr15_Hetero_group_summary.csv", row.names = 1)
-
-colnames(Het_sum)[4]<-"pop"
-Het_sum$pop<-factor(Het_sum$pop, levels=pops)
-
-ggplot()+
-    geom_boxplot(data=Het,aes(x=loc, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
-    geom_point(data=Het_sum, aes(x=Region, y=Ho, color=Group),position=position_dodge(width =0.8))+
-    facet_wrap(~pop)+
-    theme_minimal()+
-    theme(panel.grid.major.x = element_blank())+
-    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
-    scale_color_manual(values=gcols)+
-    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')
-ggsave("../Output/PCA/PWS_Chr15_Ho.in.tworegions.png", width = 8, height = 7, dpi=300)
-```
-![](../Output/PCA/PWS_Chr15_Ho.in.tworegions.png)  
 
 
 <br> 
@@ -274,30 +403,38 @@ tb3$Group<-"TB_Group3"
 tb<-rbind(tb1, tb2, tb3)
 tb<-merge(tb[,c("Group","Sample","pop")], pop_info[,c("Sample","Year.Collected","Population.Year")], by="Sample")
 tb<-tb[,c("Group","Sample","pop","Year.Collected", "Population.Year")]
-colnames(tb)[4:5]<-colnames(pca7)[4:5]
+colnames(tb)[4:5]<-colnames(pc7)[4:5]
 pc7<-rbind(pc7,tb)
 pca7<-merge(pc7[,c("Sample","pop","year","yr.pop","Group")], chr7[,c("Sample","PC1","PC2","PC3")], by="Sample", all=T)
 write.csv(pca7, "../Output/PCA/chr7_PCAgroups.csv")
 
+
 #TB_Group3 shows up too large
 ## Remove the ellipse for TB_Group3
+
+pca7$pop<-factor(pca7$pop, levels=c("TB","PWS","SS","BC","WA","CA"))
+
+
 ggplot()+
-    geom_point(data = ch7, aes(x = PC1, y = PC2, fill = pop, color = pop, shape = factor(year)), size = 3)+
+    geom_point(data = pca7, aes(x = PC1, y = PC2, fill = pop, color = pop, shape = factor(year)), size = 3)+
     scale_shape_manual(values=c(23,25,3,3,21), name="Year")+
     scale_fill_manual(values=paste0(cols,"99"), guide="none")+
     scale_color_manual(values=cols, name="Population")+
     xlab(paste("PC 1: ", prop_explained[1],"%\n",sep = ""))+
     ylab(paste("PC 2: ", prop_explained[2],"%\n",sep = ""))+
     theme_bw()+ggtitle('Chr7')+
-    stat_ellipse(data=ch7[ch7$Group!="TB_Group3",], aes(x=PC1, y=PC2, group=Group), level=0.999,color="gray50", size=0.2)+
-    geom_ellipse(aes(x0=0.075, y0=0.07,  angle=45, a=0.02, b=0.022), color="gray50", size=0.2)+geom_path()+
+    stat_ellipse(data=pca7[pca7$Group!="TB_Group3"&pca7$Group!="Group1",], aes(x=PC1, y=PC2, group=Group), level=0.99,color="gray50", size=0.3)+
+    geom_ellipse(aes(x0=0.075, y0=0.07,  angle=45, a=0.02, b=0.022), level=0.999,size=0.05, color="gray70")+
+    geom_ellipse(aes(x0=-0.023, y0=-0.003,  angle=-35, a=0.02, b=0.008), level=0.999,size=0.05, color="gray70")+
+    #geom_path()+
     annotate("text", x=-0.035, y=-0.02, label="Group 1")+
     annotate("text", x=-0.035, y=0.04, label="Group 2")+
     annotate("text", x=0, y=0.125, label="Group 3")+
     annotate("text", x=0.065, y=-0.025, label="TB_group 1")+
     annotate("text", x=0.0895, y=0.02, label="TB_group 2")+
     annotate("text", x=0.075, y=0.1, label="TB_group 3")
-ggsave("../Output/PCA/Chr7_PCA_withGroups.png", width = 6.5, height = 4.5, dpi=300)
+ggsave("../Output/PCA/Chr7_PCA_withGroups.png", width = 5.5, height = 4.5, dpi=300)
+
 
 ```
 
@@ -306,8 +443,8 @@ ggsave("../Output/PCA/Chr7_PCA_withGroups.png", width = 6.5, height = 4.5, dpi=3
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
 #Plot proportion for each population
-ch7.2<-ch7[ch7$pop=="TB",]
-ch7.1<-ch7[ch7$pop!="TB",]
+ch7.2<-pca7[pca7$pop=="TB",]
+ch7.1<-pca7[pca7$pop!="TB",]
 
 pop.sum1<-ch7.1 %>% count(Group, yr.pop)
 pop.sum2<-ch7.2 %>% count(Group, yr.pop)
@@ -315,13 +452,13 @@ pop.sum2<-ch7.2 %>% count(Group, yr.pop)
 pop.sum1$yr.pop<-factor(pop.sum1$yr.pop, levels=c("PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17"))
 pop.sum2$yr.pop<-factor(pop.sum2$yr.pop, levels=c("TB91","TB96","TB06","TB17"))
 p1<-ggplot(data=pop.sum1, aes(x=yr.pop, y=n, fill=factor(Group)))+
-    geom_bar(position="fill", stat="identity")+
+    geom_bar(position="fill", stat="identity", color="gray")+
     scale_fill_manual(values=pcacols, guide="none")+
     theme_linedraw()+theme(legend.title = element_blank())+ylab("Proportion of individuals")+
     xlab("")+
     ggtitle("chr7")
 p2<-ggplot(data=pop.sum2, aes(x=yr.pop, y=n, fill=factor(Group)))+
-    geom_bar(position="fill", stat="identity")+
+    geom_bar(position="fill", stat="identity",color="gray")+
     scale_fill_manual(values=pcacols, labels=c("Group1","Group2","Group3"))+
     theme_linedraw()+theme(legend.title = element_blank())+ylab("")+
     xlab("")+
@@ -334,7 +471,9 @@ full<-ggdraw()+
 save_plot(filename ="../Output/PCA/ch7_prop_in3groups.png", plot = full,base_width = 10, base_height = 5, dpi=300)   
 ```
 
+
 ![](../Output/PCA/ch7_prop_in3groups.png)
+
 
 ## Find the overlapping individuals  (individulas with both inversions)
 
@@ -343,24 +482,25 @@ save_plot(filename ="../Output/PCA/ch7_prop_in3groups.png", plot = full,base_wid
 ```{r eval=FALSE, message=FALSE, warning=FALSE}
 
 colors<-qualitative_hcl(8, palette="Dark3")
+"#E16A86" "#C7821C" "#909800" "#00A846" "#00AD9A" "#00A2D3" "#9183E6" "#D766C9"
 
 #1. CA pop
 gp3c7<- pca7$Sample[pca7$Group=="Group3"&pca7$pop=="CA"] # one PWS07 sample
 gp3c12<-pca12$Sample[pca12$Group=="Group3"&pca12$pop=="CA"] #one WA17 sample
 x<-list(chr7=gp3c7,chr12=gp3c12)
 
-p3<-ggvenn(x, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
-ggsave("../Output/PCA/ch7_ch12_gp3_overlap.png", width=7, height=5, dpi=300)
+p3<-ggvenn(x, fill_color = colors[c(5,8)], stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group3")
+#ggsave("../Output/PCA/ch7_ch12_gp3_overlap.png", width=7, height=5, dpi=300)
 
 gp2c7<- pca7$Sample[pca7$Group=="Group2"&pca7$pop=="CA"]
 gp2c12<-pca12$Sample[pca12$Group=="Group2"&pca12$pop=="CA"]
 x2<-list(chr7=gp2c7,chr12=gp2c12)
-p2<-ggvenn(x2, fill_color = cols,stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+p2<-ggvenn(x2, fill_color = colors[c(5,8)],stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
 
 gp1c7<- pca7$Sample[pca7$Group=="Group1"&pca7$pop=="CA"]
 gp1c12<-pca12$Sample[pca12$Group=="Group1"&pca12$pop=="CA"]
 x1<-list(chr7=gp1c7,chr12=gp1c12)
-p1<-ggvenn(x1, fill_color = colors,stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+p1<-ggvenn(x1, fill_color = colors[c(5,8)],stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
 
 vennCA<-ggdraw()+
     draw_plot(p1,x=0,y=0,width=0.33,height=1)+
@@ -369,7 +509,10 @@ vennCA<-ggdraw()+
    # draw_plot_label(c("Group1", "Group2","Group3"), x=c(0,0.33,0.66), y=c(1, 1,1), size = 10)
 save_plot(filename ="../Output/PCA/CA_group_overlap.png", plot = vennCA,base_width = 10, base_height = 5, dpi=300)   
 ```
+
+
 ![](../Output/PCA/CA_group_overlap.png)
+
 
 ### Proportion of Individuals with Ch12 and Ch7 inversions
 
@@ -425,12 +568,12 @@ for(i in 1:length(pwss)){
     gp2c7<- pca7$Sample[pca7$Group=="Group2"&pca7$yr.pop==pwss[i]] 
     gp2c12<-pca12$Sample[pca12$Group=="Group2"&pca12$yr.pop==pwss[i]] 
     x2<-list(chr7=gp2c7,chr12=gp2c12)
-    p2<-ggvenn(x2, fill_color = cols, stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
+    p2<-ggvenn(x2, fill_color = colors[c(5,8)], stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group2")
 
     gp1c7<- pca7$Sample[pca7$Group=="Group1"&pca7$yr.pop==pwss[i]]
     gp1c12<-pca12$Sample[pca12$Group=="Group1"&pca12$yr.pop==pwss[i]]
     x1<-list(chr7=gp1c7,chr12=gp1c12)
-    p1<-ggvenn(x1, fill_color = colors,stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
+    p1<-ggvenn(x1, fill_color = colors[c(5,8)],stroke_size = 0.5, set_name_size = 4,text_size=3)+ggtitle("Group1")
     
     venn<-ggdraw()+
         draw_plot(p1,x=0,y=0,width=0.5,height=1)+
@@ -449,9 +592,117 @@ for(i in 1:length(pwss)){
 
 #### Individulas with chr12 inversion and chr7 inversion do not overalap.
 
-```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+
+
+### ch7: Compare heterozygosity per region per group per year using bcftools
+The following code is referred as "Box1"
+```{bash eval=FALSE, echo=TRUE}
+#Calculate heterozygosity per window using bcftools (het_stats_PWS91.sh)
+# 
+#subset chr12 without inversion into one 
+vcftools --gzvcf Data/new_vcf/PH_DP600_7000_minQ20_minMQ30_NS0.5_maf05.vcf.gz --bed Data/chr12/chr7_withoutInversion.bed --out Data/new_vcf/PH_chr7_noInversion --recode --keep-INFO-all 
+
+vcftools --gzvcf Data/new_vcf/PH_DP600_7000_minQ20_minMQ30_NS0.5_maf05.vcf.gz --bed Data/chr12/chr7_Inversion.bed --out Data/new_vcf/PH_chr7_Inversion --recode --keep-INFO-all 
+
+gzip -c Data/new_vcf/PH_chr7_Inversion.recode.vcf > Data/new_vcf/PH_chr7_Inversion.vcf.gz
+gzip -c Data/new_vcf/PH_chr7_noInversion.recode.vcf > Data/new_vcf/PH_chr7_noInversion.vcf.gz
+
+bcftools stats -s - Data/new_vcf/PH_chr7_Inversion.vcf.gz | grep '^PSC' > Data/new_vcf/PH_chr7_Inversion_stats
+
+bcftools stats -s - Data/new_vcf/PH_chr7_noInversion.vcf.gz | grep '^PSC' > Data/new_vcf/PH_chr7_noInversion_stats
 
 ```
+
+
+### ch7: Results of observed heterozygosity (Ho) per year for each group
+* Summarize Ho based on two regions (region1=Inversion vs. region2=Non-Inversion)
+
+```{r echo=TRUE, message=FALSE, warning=FALSE,eval=FALSE}
+
+pop_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+
+popnames<-c("PWS91","PWS96","PWS07","PWS17")
+
+## Read the stats files and create het summary
+# Calculate Ho and He from bcftools stats output files (stats from PWSonly files)
+sfiles<-list.files("../Data/new_vcf/", pattern="^PH_chr7.+_stats")
+Het<-data.frame()
+Het_sum<-data.frame()
+for (i in 1:length(sfiles)){
+    df<-read.table(paste0("../Data/new_vcf/", sfiles[i]), sep="\t", header=F)
+    pname<-gsub("_stats",'',sfiles[i])
+    df<-df[,c(3:6)]
+    colnames(df)<-c("Sample","nRefHom","nNonRefHom","nHets")
+    df$p<-(2*df$nRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    df$q<-(2*df$nNonRefHom+df$nHets)/(rowSums(df[,c("nRefHom","nNonRefHom","nHets")])*2)
+    
+    df$He<-2*df$p*df$q
+    df$Ho<-df$nHets/rowSums(df[,c("nRefHom","nNonRefHom","nHets")])
+    
+    #remove TB
+    df1<-df[!grepl("TB",df$Sample),]
+    df1$Group<-"Group1"
+    df1$Group[df1$Sample %in% pca7$Sample[pca7$Group=="Group2"]]<-"Group2"
+    df1$Group[df1$Sample %in% pca7$Sample[pca7$Group=="Group3"]]<-"Group3"
+    write.csv(df,paste0("../Output/chr12/chr7_Hetero_",pname,"_maf05.csv"))
+    df1$region<-gsub("PH_chr7_",'',pname)
+    df1$pop<-"nonTB"
+    Het<-rbind(Het, df1)
+    
+    #TB only
+    df2<-df[grepl("TB",df$Sample),]
+    df2$Group<-"Group1"
+    df2$Group[df2$Sample %in% pca7$Sample[pca7$Group=="TB_Group2"]]<-"Group2"
+    df2$Group[df2$Sample %in% pca7$Sample[pca7$Group=="TB_Group3"]]<-"Group3"
+    #write.csv(df,paste0("../Output/chr12/chr7_Hetero_",pname,"_maf05.csv"))
+    df2$region<-gsub("PH_chr7_",'',pname)
+    df2$pop<-"TB"
+    Het<-rbind(Het, df2)
+    
+    
+    
+    Ho<-aggregate(df1[,"Ho"], by=list(df1$Group), mean )
+    He<-aggregate(df1[,"He"], by=list(df1$Group), mean )
+    het<-cbind(Ho, He$x)
+    colnames(het)<-c("Group","Ho","He")
+    het$region<-gsub("PH_chr7_",'',pname)
+    het$pop<-"nonTB"
+    
+    Ho2<-aggregate(df2[,"Ho"], by=list(df2$Group), mean )
+    He2<-aggregate(df2[,"He"], by=list(df2$Group), mean )
+    het2<-cbind(Ho2, He2$x)
+    colnames(het2)<-c("Group","Ho","He")
+    het2$region<-gsub("PH_chr7_",'',pname)
+    het2$pop<-"TB"
+    Het_sum<-rbind(Het_sum,het)
+    Het_sum<-rbind(Het_sum,het2)
+    
+}
+write.csv(Het_sum, "../Output/chr7/chr7_Heteroz_Inv_summary.csv")
+
+gcols<-c('#ffffb3','#8dd3c7','#bebada')
+
+
+ggplot()+
+    geom_boxplot(data=Het,aes(x=region, y=Ho, color=Group, fill=Group), position=position_dodge(width =0.8),outlier.alpha = 0.6, outlier.size = 1,width=0.7)+
+    facet_wrap(~pop)+
+    geom_point(data=Het_sum, aes(x=region, y=Ho, color=Group),position=position_dodge(width =0.8))+
+    theme_minimal()+
+    theme(panel.grid.major.x = element_blank(), legend.title = element_blank())+
+    geom_vline(xintercept = c(1.5), color="gray70",size=0.3)+
+    scale_color_manual(values=c("orange",gcols[2:3]))+
+    scale_fill_manual(values=paste0(gcols, "66"))+xlab('')+
+    scale_x_discrete(labels=c('Inversion',"Non-Inversion"))
+ggsave("../Output/PCA/Chr7_Ho.in.twoRegions.png", width =6, height=3 , dpi=300)
+
+```
+
+![](../Output/PCA/Chr7_Ho.in.twoRegions.png)
+
+
+
+
 
 ```{r echo=TRUE, message=FALSE, warning=FALSE}
 

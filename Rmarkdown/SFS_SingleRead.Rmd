@@ -1,0 +1,562 @@
+---
+title: "SFS adn Pi from Single Read Sampling"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: True
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+source("../Rscripts/BaseScripts.R")
+require(data.table)
+require(plyr)
+require(RColorBrewer)
+```
+ 
+
+# Pi from Single Read Sampling in ANGSD 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#pops.info<-read.csv("../Data/Sample_metadata_892pops.csv")
+pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+
+full<-data.frame()
+for (i in 1:length(pops)){
+    theta<-read.delim(paste0('../Data/IBS/',pops[i],'_theta_ibs_50kwin_10kstep.pestPG'))
+    theta$pi<-theta$tP/theta$nSites
+    theta<-theta[,c("Chr","WinCenter","pi","Tajima" )]
+    theta$pop.yr<-pops[i]
+    theta$pop<-gsub("([0-9])",'', pops[i])
+    full<-rbind(full, theta)
+}
+
+full$pop.yr<-factor(full$pop.yr, levels=pops)
+full$pop<-factor(full$pop, levels=c("TB","PWS","SS","BC","WA","CA"))
+means <- aggregate(pi ~ pop.yr,full, mean)
+ggplot(full, aes(x=pop.yr, y=pi, color=pop))+
+        geom_boxplot(aes(color=pop), outlier.alpha = 0.2, outlier.size = 0.6)+
+        theme_classic()+ 
+        geom_point(stat = "summary", fun = "mean", color="gray40")+
+         xlab("")+ylab(expression(pi))+
+        geom_text(data = means, aes(label = round(pi, digits=5), y = pi + 0.015),size=3, color="gray40")+
+    scale_color_manual(values=cols, guide='none')
+ggsave(paste0("../Output/Pi/Pi_fromANGSD_allpops.png"), width = 8, height = 5, dpi=300)
+
+#zoom in 
+ggplot(full, aes(x=pop.yr, y=pi, color=pop))+
+        geom_boxplot(aes(color=pop), outlier.alpha = 0.2, outlier.size = 0.6)+
+        theme_classic()+ylim(0, 0.0075)+
+        geom_point(stat = "summary", fun = "mean", color="gray40")+
+         xlab("")+ylab(expression(pi))+
+        geom_text(data = means, aes(label = round(pi, digits=5), y = 0.0004),size=3, color="gray40")+
+    scale_color_manual(values=cols,guide='none')
+ggsave(paste0("../Output/Pi/Pi_fromANGSD_allpops_zoomed.png"), width = 8, height = 5, dpi=300)
+
+
+```
+![](../Output/Pi/Pi_fromANGSD_allpops.png) 
+
+* Zoomed in plot
+![](../Output/Pi/Pi_fromANGSD_allpops_zoomed.png)
+
+* Compare to read coverage
+![](../Output/QC/Mean_coverage_plot_per_pop.year.png)  
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# what is the mean pi change? 
+
+pws_change<-1-means$pi[means$pop.yr=="PWS17"]/means$pi[means$pop.yr=="PWS07"]
+#0.07307 7.3% decrease
+
+tb_change<-1-means$pi[means$pop.yr=="TB17"]/means$pi[means$pop.yr=="TB06"]
+#0.04969787. 5.0 % decrease
+```
+
+
+# Calculate expected heterozygosity    
+* Heterozygosity estimates using 2p(1-p) (He)
+
+
+## Expected heterozygostiy (He) 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+# Run 
+
+pops.info<-read.csv("../Data/Sample_metadata_892pops.csv")
+sampleN<75-data.frame(table(pops.info$Population.Year))
+write.csv(sampleN,"../Data/Samplesize.per.pop.csv", row.names = F)
+#### Calculate SFS from IBS data
+#ifiles<-list.files('../Data/IBS/SAF/', pattern='.ibs.gz') #genotype info (0,1,-1)
+mfiles<-list.files('../Data/IBS/SAF/', pattern='.mafs.gz') # estimated freq
+
+summaryHe<-data.frame(V=1:length(mfiles))
+#for (f in 2: length(mfiles)){
+for (f in 13:14){
+    mf<-fread(paste0('../Data/IBS/SAF/', mfiles[f])) 
+    samplename<-gsub("_ibs.mafs.gz", '', mfiles[f])
+    
+    #number of sample
+    n<-sampleN$Freq[sampleN$Var1==samplename]
+    
+    #remove the sites with less than n/2 samples 
+    mf<-mf[mf$nInd>=n/2,]
+    mf<-mf[,c("chromo","position","knownEM")]
+
+    #calculate He
+    mf$het<-mf$knownEM*2*(1-mf$knownEM)
+    
+    summaryHe$pop[f]<-samplename
+    summaryHe$He_knownEM[f]<-mean(mf$het)
+    #summaryHe$He_maf[f]<-mean(freq$het2, na.rm=T)
+    
+    # calculate every 50,000th row average
+    w=50000
+    df<-mf[, mean(het), by= (seq(nrow(mf)) - 1) %% w]
+    
+    write.csv(df, file=gzfile(paste0("../Output/SingleRead/He_50kwin_from.fullSaf.", samplename,".csv.gz")))
+    print(f)
+    gc()
+}
+summaryHe[,1]<-gsub("([0-9])",'', summaryHe$pop)
+colnames(summaryHe)<-c("pop","pop.yr", "meanHe")
+write.csv(summaryHe, "../Output/SingleRead/Het_mean.csv", row.names = F)
+```
+
+
+## Plot the results 
+``` {r eval=FALSE, message=FALSE, warning=FALSE}
+# Read the summary He files and create a figure
+
+hfiles<-list.files("../Output/SingleRead/", pattern="He_50kwin_from.fullSaf.")
+Het<-data.frame()
+for (i in 1: length(hfiles)){
+    df<-fread(paste0("../Output/SingleRead/", hfiles[i]))
+    df<-df[,2:3]
+    samplename<-gsub("He_50kwin_from.fullSaf.", '', hfiles[i])
+    samplename<-gsub(".csv.gz", '', samplename)
+    df$pop.yr<-samplename
+    df$pop<-gsub("([0-9])",'', samplename)
+    Het<-rbind(Het, df)
+}
+colnames(Het)[2]<-"he"
+Het$pop.yr<-factor(Het$pop.yr, levels=pops)
+Het$pop<-factor(Het$pop, levels=c("TB","PWS","SS","BC","WA","CA"))
+means<-read.csv("../Output/SingleRead/Het_mean.csv")
+colnames(means)[3]<-"he"
+means$pop.yr<-factor(means$pop.yr, levels=pops)
+
+
+ggplot(Het, aes(x=pop.yr, y=he, color=pop))+
+    geom_boxplot(outlier.alpha = 0.2, outlier.size = 0.6)+
+    theme_classic()+
+    #geom_point(data=means, aes(x=pop.yr, y=meanHe), color="gray40")+
+    geom_point(stat = "summary", fun = "mean", color="gray40")+
+    xlab("")+ylab("He")+
+    geom_text(data = means, aes(label = round(he, digits=5), y = 0.005), color="gray40", size=2)+
+    scale_color_manual(values=cols, guid="none")
+ggsave(paste0("../Output/SingleRead/ExpectedHet_fromANGSD_EM_allpops.png"), width = 8, height = 5, dpi=300)
+
+```
+
+![](../Output/SingleRead/ExpectedHet_fromANGSD_EM_allpops.png)
+
+
+* Compare to read coverage
+![](../Output/QC/Mean_coverage_plot_per_pop.year.png)
+
+## Correlation analysis 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+year<-c(1991,1996,2006,2017,1991,1996,2007,2017,1996,2006,2017,2017,2017,2017)
+
+#coverage info 
+byPopYr<-read.csv("../Output/QC/Bam_metrics_summary.csv", row.names = 1)
+colnames(byPopYr)<-c("pop.yr","depth")
+# mean pi from ANGSD
+data<-merge(byPopYr, means, by="pop.yr")
+
+#mean Ho
+he<-read.csv("../Output/SingleRead/Het_mean.csv")
+data<-merge(data, he, by="pop.yr")
+
+#Tajima's D
+tajimaD <- aggregate(Tajima ~ pop.yr,full, mean)
+data<-merge(data, tajimaD, by="pop.yr")
+write.csv(data, "../Output/SingleRead/Pi_He_Depth_summary_byPop.csv", row.names = F)
+
+
+cor.test(data$depth, data$pi, method = "spearman")
+#S = 210, p-value = 0.04999
+#alternative hypothesis: true rho is not equal to 0
+#sample estimates:
+#      rho 
+#0.5384615 
+
+cor.test(data$depth, data$meanHe, method = "spearman")
+#S = 176, p-value = 0.02247
+#alternative hypothesis: true rho is not equal to 0
+#sample estimates:
+#      rho 
+#0.6131868 
+
+cor.test(data$depth, data$Tajima, method = "spearman")
+#S = 532, p-value = 0.5629
+#alternative hypothesis: true rho is not equal to 0
+#sample estimates:
+#       rho 
+#-0.1692308 
+
+
+data$pop<-factor(data$pop, levels=c("TB","PWS","SS", "BC","WA","CA"))
+ggplot(data, aes(x=depth, y=pi, color=pop))+
+    geom_point(size=3)+
+    xlab("Mean read depth")+
+    ylab(expression(paste("Mean ", pi)))+
+    theme_bw()+
+    annotate('text', x=1.28, y=0.00325, label="rho = 0.54*", size=3)+
+    scale_color_manual(values=cols)+ theme(legend.title = element_blank())
+ggsave("../Output/SingleRead/Correlation_depth.vs.Pi.png", width = 5.2, height = 4, dpi=300)
+
+
+ggplot(data, aes(x=depth, y=meanHe,color=pop))+
+    geom_point(size=3)+
+    xlab("Mean read depth")+
+    ylab("Mean He")+
+    theme_bw()+  scale_color_manual(values=cols)+
+    annotate('text', x=1.28, y=0.0041, label="rho = 0.61*", size=3)+
+    theme(legend.title = element_blank())
+ggsave("../Output/SingleRead/Correlation_depth.vs.He.png", width = 5.2, height = 4, dpi=300)
+
+```
+
+![](../Output/SingleRead/Correlation_depth.vs.Pi.png)
+
+![](../Output/SingleRead/Correlation_depth.vs.He.png)
+
+
+# Plot SFS 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+pops_info<-read.csv("../Data/Sample_metadata_892pops.csv")
+popn<-data.frame(table(pops_info$Population.Year))
+
+
+sfs1D<-data.frame()
+for (i in 1:length(pops)){
+    sfs <- scan(paste0("../Data/IBS/SFS/",pops[i],"_unfolded.sfs"))
+    sfs1 <- data.frame(ac=sfs)
+    sfs1$count<-0:(nrow(sfs1)-1)
+    #remove the invariable sites
+    sfs1<-sfs1[-c(1,nrow(sfs1)),]
+    sfs1$pop<-pops[i]
+    sfs1D<-rbind(sfs1D, sfs1)
+}
+    
+sfs1D$pop<-factor(sfs1D$pop, levels=pops)
+ggplot(data=sfs1D, aes(x=count, y=ac))+
+    facet_wrap(~pop, ncol=4)+
+        geom_bar(stat="identity", color="gray")+xlab("Frequency bin")+ ylab("Number of alleles")+
+        theme_bw()+
+        scale_y_continuous(labels=scales::comma)+
+        theme(panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank(), panel.grid.minor.y = element_blank(), panel.grid.major.y = element_line(size=0.3))
+ggsave("../Output/SingleRead/1DSFS_IBS_fromBam.png", width = 8, height = 5.5, dpi=300)
+
+
+# calculated with doIBS files with SNP p=val cutoff
+sfiles<-list.files("../Output/SingleRead/", pattern = "SFS_.+.csv")
+SFS<-data.frame()
+for(i in 1:length(sfiles)){
+    df<-read.csv(paste0("../Output/SingleRead/", sfiles[i]), row.names = 1)
+    
+    popname<-gsub("SFS_",'',sfiles[i])
+    popname<-gsub(".csv","",popname)
+    #sample size per pop
+    samplen<-popn$Freq[popn$Var1==popname]
+    #remove invariant sites
+    df<-df[!(df$Var1 %in% c(0, samplen)),]
+    
+    df$pop<-popname
+    SFS<-rbind(SFS,df)
+}
+
+SFS$pop<-factor(SFS$pop,levels=c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","CA17"))
+ggplot(SFS, aes(x=Var1, y=Freq))+
+    facet_wrap(~pop,ncol=4)+
+    geom_bar(stat="identity", color="gray")+
+    xlab("Frequency")+ ylab("Number of alleles")+
+    theme_bw()+
+    scale_y_continuous(labels=scales::comma)+
+    theme( panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank())
+ggsave("../Output/SingleRead/SFS_populations.year.png", width = 8, height = 5.5, dpi=300)
+ 
+
+```
+![](../Output/SingleRead/SFS_populations.year.png)
+![](../Output/SingleRead/1DSFS_IBS_fromBam.png)
+
+
+# Compare Mafs.gz file from -doIBS run and -doSaf run for PWS17 
+
+* 1. -> angsd -bam /home/ktist/ph/data/angsd/samples/PWS17.txt -minMapQ 30 -minQ 20 -GL 2 -doMajorMinor 1 -doMaf 1 -SNP_pval 2e-6 -doIBS 1 -doCounts 1 -doCov 1 -makeMatrix 1 -minMaf 0 -P 24 -out /home/ktist/ph/data/angsd/single_read/PWS17   
+  File size was 229.3Mb
+* 2. -> angsd -bam /home/ktist/ph/data/angsd/samples/PWS17.txt -doSaf 1 -doMajorMinor 1 -GL 2 -doMaf 1 -doCounts 1 -doGlf 3 -doIBS 1 -SNP_pval 2e-6 -anc /home/jamcgirr/ph/data/c_harengus/c.harengus.fa -ref /home/jamcgirr/ph/data/c_harengus/c.harengus.fa -minMapQ 30 -minQ 20 -P 24 -uniqueOnly 1 -remove_bads 1 -only_proper_pairs 1 -trim 0 -C 50 -minInd 20 -setMaxDepth 1000 -out /home/ktist/ph/data/angsd/SFS/fromBam/PWS17_ibs 
+
+The main difference was having  -uniqueOnly 1 -remove_bads 1 -only_proper_pairs 1
+
+* -only_proper_pairs 1	Only use reads where the mate could be mapped -- may be not appropriate for single-read???
+* -remove_bads	1	Discard 'bad' reads, (flag & 512) 
+* -uniqueOnly	1	Discards reads that doesn't map uniquely
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+ibs1 <- fread('../Data/IBS/Done/PWS17.mafs.gz') #18,163,385 sites
+#remove the sites that do not have 20 samples
+ibs1<-ibs1[ibs1$nInd>=20, ] #15,133,767 sites (still doble of #2)
+
+ibs2 <- fread('../Data/IBS/SFS/PWS17_ibs.mafs.gz') #7,089,349 sites 
+
+
+ch1.1<-ibs1[ibs1$chromo=="chr1",]
+ch1.2<-ibs2[ibs2$chromo=="chr1",]
+
+mean(ch1.1$knownEM) #0.1259165
+mean(ch1.2$knownEM) #0.1235413
+
+min(ch1.1$knownEM) #0.008929
+min(ch1.2$knownEM) #0.00895
+
+
+ch1.1$he<-2*ch1.1$knownEM*(1-ch1.1$knownEM)
+mean(ch1.1$he, na.rm=T)#0.1889671
+ch1.2$he<-2*ch1.2$knownEM*(1-ch1.2$knownEM)
+mean(ch1.2$he, na.rm=T)
+#0.1861933
+
+# all numbers are highly similar in terms of mean MAF and Heterozygosity
+# In order to calculate pi, we need the all sites SFS without using p-val cutoff
+```
+
+## Pi (theta) from new file of PWS07 and PWS17  
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#1. PWS07
+pops2<-c("PWS07","PWS17")
+full<-data.frame()
+for (i in 1:length(pops2)){
+    new_theta<-read.delim(paste0('../Data/IBS/',pops2[i],'_ibs_50kwin_10kstep.pestPG'))
+    new_theta$pi<-new_theta$tP/new_theta$nSites
+    new_theta<-new_theta[,c("Chr","WinCenter","pi","Tajima" )]
+    new_theta$method<-"IBS"
+    
+    old_theta<-read.delim(paste0('../Data/new_vcf/angsd/fromBam/unfolded/',pops2[i],'_50kwin_10kstep.pestPG'))
+    old_theta$pi<-old_theta$tP/old_theta$nSites
+    old_theta<-old_theta[,c("Chr","WinCenter","pi","Tajima" )]
+    old_theta$method<-"Full SAF"
+    
+    pi<-rbind(old_theta, new_theta)
+    
+    ggplot(pi, aes(x=method, y=pi))+
+    geom_boxplot(color=cols[4], outlier.alpha = 0.5, outlier.size = 0.8)+
+    geom_point(stat = "summary", fun = "mean")+
+    ylab(expression(pi))+xlab("")+
+    theme_bw()+ggtitle(pops2[i])+
+    theme(panel.grid.major.x = element_blank())
+    
+    ggsave(paste0("../Output/SingleRead/Pi_estimates_compareIBS.vs.Full.",pops2[i],".png"), width = 3, height = 3, dpi=300)
+}
+
+#adding p-value cutoff for SNP calling will eliminate lower frequency or invariant sites so not appropriate for Theta estimates. 
+
+```
+![](../Output/SingleRead/Pi_estimates_compareIBS.vs.Full.PWS17.png)
+
+![](../Output/SingleRead/Pi_estimates_compareIBS.vs.Full.PWS07.png)
+
+
+
+
+## Tajima's D. 
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+#Tajima's D (folded SFS)
+theta<-data.frame()
+for (i in 1:length(pops2)){
+    theta2<-read.delim(paste0('../Data/IBS/',pops2[i],'_folded_theta_ibs_50kwin_10kstep.pestPG'))
+    df<-theta2[,c("Chr","WinCenter","Tajima" )]
+    df$pop<-pops2[i]    
+    theta<-rbind(theta, df)
+}
+
+theta$pop<-factor(theta$pop, levels=pops)
+ggplot(theta, aes(x=pop, y=Tajima))+
+    geom_boxplot(position=position_dodge(width = 0.8), color=org, outlier.alpha = 0.6,outlier.size = 0.7,width=0.6)+
+    geom_point(stat = "summary", fun = "mean",position=position_dodge(width = 0.8))+
+    ylab("Tajima's D")+xlab("")+
+    theme_bw()+
+    theme(panel.grid.major.x = element_blank())+
+    geom_vline(xintercept = c(1.5,2.5,3.5), color="gray", size=0.5)
+ggsave("../Output/SFS/TajimaD_PWS_fromBam.png", width = 5, height = 3.5)
+
+
+```
+
+
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+sfiles<-list.files('../Output/SingleRead/', pattern="^Het_.+.csv.gz")
+
+#calculate per site He
+
+summaryHe<-data.frame(V=1:length(sfiles))
+for (f in 1: length(sfiles)){
+    af<-fread(paste0("../Output/SingleRead/", sfiles[f]))
+    fname<-gsub("Het_",'',sfiles[f])
+    fname<-gsub(".csv.gz",'', fname)
+    
+    af$het1<-af$knownEM*2*(1-af$knownEM)
+    af$het2<-af$maf*2*(1-af$maf)
+    
+    write.csv(af, file=gzfile(paste0('../Output/SingleRead/',sfiles[f])))
+    
+    summaryHe$He_knownEM[f]<-mean(af$het1)
+    summaryHe$He_maf[f]<-mean(af$het2, na.rm=T)
+}
+
+
+# set window size and window jump
+window_size <- 50000
+window_jump <- 10000
+Chrsize<-read.delim("../Data/new_vcf/chr_sizes.bed", header = F)
+names(Chrsize)<-c("chr","start","end")
+
+
+
+
+
+
+for (f in 1: length(sfiles)){
+    af<-fread(paste0("../Output/SingleRead/", sfiles[f]))
+    fname<-gsub("MAF_",'',sfiles[f])
+    fname<-gsub(".csv.gz",'', fname)
+    He_windows<-data.frame()
+    for (i in 1:26){
+        # use seq to find the start points of each window
+        window_start <- seq(from = 1, to = Chrsize$end[i], by = window_jump)
+        # add the size of the window to each start point 
+        window_stop <- window_start + window_size-1
+    
+        window_start <- window_start[which(window_stop < Chrsize$end[i])]
+        window_stop <- window_stop[which(window_stop < Chrsize$end[i])]
+    
+        # save as a data.frame
+        windows <- data.frame(chr=paste0("chr",i),start = window_start, stop = window_stop, 
+                          mid = window_start + (window_stop-window_start)/2)
+    
+        
+        df<-af[af$chromo==paste0("chr",i),]
+        
+        #window-based He per chromosome
+        for (j in 1:nrow(windows)){
+            dat<-df[df$position>=windows$start[j] & df$position<=windows$stop[j],]
+            n=50000-nrow(dat)
+            
+            windows$het1[j]<-mean(c(dat$het1, rep(0, times=n)), na.rm=T)
+            windows$het2[j]<-mean(c(dat$het2, rep(0, times=n)), na.rm=T)
+        }
+        
+        He_windows<-rbind(He_windows, windows) 
+    
+    }
+    write.csv(He_windows, file=gzfile(paste0("../Output/SingleRead/Het_windowed_",fname,".csv.gz")))
+    
+    
+    
+    
+for (i in 1:26){
+    # use seq to find the start points of each window
+    window_start <- seq(from = 1, to = Chrsize$end[i], by = window_jump)
+    # add the size of the window to each start point 
+    window_stop <- window_start + window_size-1
+
+    window_start <- window_start[which(window_stop < Chrsize$end[i])]
+    window_stop <- window_stop[which(window_stop < Chrsize$end[i])]
+
+    # save as a data.frame
+    windows <- data.frame(chr=paste0("chr",i),start = window_start, stop = window_stop, 
+                      mid = window_start + (window_stop-window_start)/2)
+
+    for ()
+    df<-af3[af3$chromo==paste0("chr",i),]
+    #He per chromosome
+    for (j in 1:nrow(windows)){
+        dat<-df[df$position>=windows$start[j] & df$position<=windows$stop[j],]
+        n=50000-nrow(dat)
+        
+        windows$het1[j]<-mean(c(dat$het1, rep(0, times=n)), na.rm=T)
+        windows$het2[j]<-mean(c(dat$het2, rep(0, times=n)), na.rm=T)
+    }
+    
+    He_windows<-rbind(He_windows, windows) 
+}
+
+## This expected heterozygosity is from the IBS data with maf >0.05. To obtain the average he, assumed all other sites were het=0 and calculated the average for 50000 base windows. 
+
+mean(He_windows$het1) 
+#0.004742556
+mean(He_windows$het2)
+#0.004360721
+
+# stats from bcftools and calculating 2pq for PWS07 (He) was 0.01794937 (using hard called genotypes)
+
+
+
+
+```
+
+
+
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# 1. Use -doIBS 1 (select random), -doMaf 3 (unknown EM inferred from GL)
+ibs1 <- fread('../Data/IBS/PWS07.ibs.gz')
+names(ibs1)[1:(ncol(ibs1)-1)]<-names(ibs1)[2:ncol(ibs1)]
+ibs1<-ibs1[,1:(ncol(ibs1)-1)]
+
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+
+```
+
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+
+```
+

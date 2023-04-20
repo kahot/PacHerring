@@ -1,0 +1,354 @@
+title: "Genes in COV scan outlier regions"
+output:
+  html_notebook:
+      toc: true 
+      toc_float: true
+      number_sections: true
+      theme: lumen
+      highlight: tango
+      code_folding: hide
+      df_print: paged
+---
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source("../Rscripts/BaseScripts.R")
+library(tidyverse)
+library(dplyr)
+library(cowplot)
+require(scales)
+```
+
+# Find regions with high covariances in the PWS population
+* From Temporal Covariance analysis  -output covariances for each time period
+
+## Plot the covariances across the genome  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#Find the regions with a high temporal covariance 
+
+winsize<-c("100k","250k")
+evens<-paste0("chr",seq(2,26, by=2))
+cov.list<-list()
+
+for (i in 1: length(winsize)){
+    cov12<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/PWSonly_maf05_cov12_1996-1991_2006-1996_md7000_",winsize[i],"window.csv"), header = F)
+    cov23<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/PWSonly_maf05_cov23_2017-2006_2006-1996_md7000_",winsize[i],"window.csv"), header = F)
+    cov13<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/PWSonly_maf05_cov13_2017-2006_1996-1991_md7000_",winsize[i],"window.csv"), header = F)
+    iv<-read.csv(paste0("~/Projects/Pacherring_Vincent/MD7000/PWSonly_MD7000_intervals_",winsize[i],"window.csv"), row.names = 1)
+                 
+    covs<-cbind(iv, cov12, cov23,cov13)
+    colnames(covs)[4:6]<-c("cov12","cov23","cov13")
+    covs$index=1:nrow(covs)
+    
+    covs$color<-"col1"
+    covs$color[covs$chrom %in% evens]<-"col2"
+    
+    covs$cov12[is.nan(covs$cov12)]<-NA
+    covs$cov12[is.infinite(covs$cov12)]<-NA
+    
+    cov.list[[i]]<-covs
+    names(cov.list)[i]<-winsize[i]
+    covsm<-melt(covs[,c("index","color","cov12","cov23","cov13")], id.vars = c("index", "color"))
+    ymax<-max(covsm$value, na.rm=T)
+    y<-min(covsm$value, na.rm=T)
+    ymin<-ifelse (y<=-0.1,-0.1, y) 
+    ggplot(covsm, aes(x=index, y=value, color=color))+
+        facet_wrap(~variable, nrow=3)+
+        geom_point(size=1, alpha=0.5)+
+        theme_classic()+
+        ylim(ymin,ymax)+
+        scale_color_manual(values=c("gray70","steelblue"), guide="none")+
+        ylab("Covariance")+xlab('Chromosome')+
+        theme(axis.text.x = element_blank())+
+        ggtitle(paste0("PWS"," ", winsize[i]," window"))
+    ggsave(paste0("../Output/COV/PWSonly_tempCovs_acrossGenome_",winsize[i], "Window.png"), width = 8, height = 8, dpi=300)    
+}
+```
+
+![](../Output/COV/PWSonly_tempCovs_acrossGenome_100kWindow.png) 
+
+![](../Output/COV/PWSonly_tempCovs_acrossGenome_250kWindow.png)   
+
+
+## Find the outlier regions for each time period  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#find how outliers overlap between different windows
+cov12<-data.frame()
+cov23<-data.frame()
+cov13<-data.frame()
+
+for (i in 1:length(winsize)){
+    covs<-cov.list[[i]]
+    covs<-covs[order(covs$cov12, decreasing=T),]
+    n<-ceiling(nrow(covs)*0.01) #top1% region
+    covs12_top<-covs[1:n,c(1:4)]
+    covs12_top<-covs12_top[order(covs12_top$chrom, covs12_top$start),]
+    covs12_top$window<-winsize[i]
+    cov12<-rbind(cov12, covs12_top)
+    
+    covs<-covs[order(covs$cov13, decreasing=T),]
+    n<-ceiling(nrow(covs)*0.01) #top1% region
+    covs13_top<-covs[1:n,c(1:3,6)]
+    covs13_top<-covs13_top[order(covs13_top$chrom, covs13_top$start),]
+    covs13_top$window<-winsize[i]
+    cov13<-rbind(cov13, covs13_top)
+    
+    covs<-covs[order(covs$cov23, decreasing=T),]
+    n<-ceiling(nrow(covs)*0.01) #top1% region
+    covs23_top<-covs[1:n,c(1:3,5)]
+    covs23_top<-covs23_top[order(covs23_top$chrom, covs23_top$start),]
+    covs23_top$window<-winsize[i]
+    cov23<-rbind(cov23, covs23_top)
+    
+}
+
+write.csv(cov12, "../Output/COV/PWSonly_top1percent_outlier_regions.cov12.csv",row.names = F)
+write.csv(cov23, "../Output/COV/PWSonly_top1percent_outlier_regions.cov23.csv",row.names = F)
+write.csv(cov13, "../Output/COV/PWSonly_top1percent_outlier_regions.cov13.csv",row.names = F)
+```
+
+
+## Find overlapping regions between 100k and 250k windows and output the regions as bed files  
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+
+#1. Find the overlapping regions between between 100k and 250k windows
+
+cov12<-read.csv("../Output/COV/PWSonly_top1percent_outlier_cov12_overlap.csv")
+cov23<-read.csv("../Output/COV/PWSonly_top1percent_outlier_cov23_overlap.csv")
+cov13<-read.csv("../Output/COV/PWSonly_top1percent_outlier_cov13_overlap.csv")
+
+#dataframe to store overlapping regions
+overlaps<-data.frame()
+#covariacne time periods
+covars<-c("cov12","cov23","cov13")
+#response
+ov<-c("Y","M")
+for (i in 1:3){
+    df<-read.csv(paste0("Output/COV/PWSonly_top1percent_outlier_",covars[i],"_overlap.csv"))
+    df$Cov<-covs[i]
+    colnames(df)[which(colnames(df)==covars[i])]<-"cov"
+    overlaps<-rbind(overlaps, df[df$overlap %in% ov,])
+}
+
+write.csv(overlaps, "../Output/COV/PWSonly_outliers_overlaps_100k.250k.csv")
+
+
+#Create bed files for top 1% region (100k) and overlapping regions
+
+#Bedfile
+write.table(overlaps[overlaps$Cov=="cov12",1:3], "../Output/COV/PWSonly_outliers_overlap_cov12.bed", quote = F, row.names = F, col.names = F,sep = "\t")
+write.table(overlaps[overlaps$Cov=="cov13",1:3], "../Output/COV/PWSonly_outliers_overlap_cov13.bed", quote = F, row.names = F, col.names = F,sep = "\t")
+write.table(overlaps[overlaps$Cov=="cov23",1:3], "../Output/COV/PWSonly_outliers_overlap_cov23.bed", quote = F, row.names = F, col.names = F,sep = "\t")
+# remove the overlapping regions from the bed file manually. 
+
+
+write.table(cov12[cov12$window=="100k",1:3], "../Output/COV/PWSonly_outliers_100k_cov12.bed", quote = F, row.names = F, col.names = F,sep = "\t")
+write.table(cov13[cov13$window=="100k",1:3], "../Output/COV/PWSonly_outliers_100k_cov13.bed", quote = F, row.names = F, col.names = F,sep = "\t")
+write.table(cov23[cov23$window=="100k",1:3],"../Output/COV/PWSonly_outliers_100k_cov23.bed", quote = F, row.names = F, col.names = F,sep = "\t")
+
+## add 25000 bases to the regions of interest
+
+
+
+co12<-cov12[cov12$window=="100k",1:3]
+co12$start<-as.vector(sapply(co12["start"], function(x) x-25000))
+co12$end<-as.vector(sapply(co12["end"], function(x) x+25000))
+
+for (i in 1:3){
+    df<-get(covars[i])
+    df<-df[df$window=="100k",1:3]
+    df$start<-as.vector(sapply(df["start"], function(x) x-25000))
+    df$end<-as.vector(sapply(df["end"], function(x) x+25000))
+    write.table(df, paste0("../Output/COV/PWSonly_outliers_100k_padded_",covars[i],".bed"), quote = F, row.names = F, col.names = F,sep = "\t")
+}
+
+```
+
+
+## Run the snpEff pipeline to find annotation in the outlier regions  
+* Create a script to run SnpEff 
+
+Create VCF files with selected regions & run snpEff  
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#create a bash script to run snpEff
+bedfiles<-list.files("../Output/COV/", pattern="^PWSonly.*.bed")
+
+sink("../COVscan_createVCFs.sh")
+cat("#!/bin/bash \n\n")
+for (i in 1:length(bedfiles)){
+    fname<-gsub(".bed",'', bedfiles[i])
+    cat(paste0("vcftools --gzvcf Data/new_vcf/PWSonly/PWSonly_NS0.5_maf05.vcf.gz --bed Output/COV/", bedfiles[i], " --out Output/COV/COVscan/", fname," --recode --keep-INFO-all \n"))
+}
+sink(NULL)  
+
+#create a bash script to run snpEff
+vfiles<-list.files("../Output/COV/COVscan/", pattern=".recode.vcf")
+
+sink("~/programs/snpEff/runsnpEff_cov.sh")
+cat("#!/bin/bash \n\n")
+for (i in 1:length(vfiles)){
+    fname<-gsub(".recode.vcf","",vfiles[i])
+    cat(paste0("java -Xmx8g -jar snpEff.jar Ch_v2.0.2.99 ~/Projects/PacHerring/Output/COV/COVscan/",vfiles[i], " -stats ~/Projects/PacHerring/Output/COV/COVscan/",fname,".html >  ~/Projects/PacHerring/Output/COV/COVscan/Anno.",fname,".vcf \n"))
+    
+    #extract the annotation information
+    cat(paste0("bcftools query -f '%CHROM %POS %INFO/AF %INFO/ANN\\n' ~/Projects/PacHerring/Output/COV/COVscan/Anno.",fname,".vcf > ~/Projects/PacHerring/Output/COV/COVscan/",fname,"_annotation \n\n"))
+
+}
+sink(NULL)  
+
+```
+
+```{bash eval=FALSE, include=FALSE}
+cd ~/Projects/PacHerring
+bash COVscan_createVCFs.sh
+
+cd ~/programs/snpEff
+bash runsnpEff/sh
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+## Create summary files of snpEff results (gene annotations in the regions of interest) and reformat as a ShinyGo input 
+
+#create gene list 
+gfiles<-list.files("../Output/COV/COVscan/", pattern="genes.txt")
+
+for (i in 1:length(gfiles)){
+    df<-read.table(paste0("../Output/COV/COVscan/",gfiles[i]), sep="\t")
+    df<-df[,1:7]
+    colnames(df)<-c("GeneName","GeneId","TranscriptId","BioType","variants_impact_HIGH","variants_impact_LOW",	"variants_impact_MODERATE")
+    
+    fname<-gsub(".genes.txt","",gfiles[i])
+    genes<-unique(df$GeneId)
+    sink(paste0("../Output/COV/COVscan/geneIDlist_",fname,".txt"))
+    cat(paste0(genes,"; "))
+    sink(NULL)
+}
+
+
+```
+
+## ShinyGo output
+![](../Output/COV/COVscan/PWSonly/ShinyGo0.76/PWSonly_outliers_100k_cov12/barplot.png)
+
+```{r eval=FALSE}
+co12<-read.csv("~/Projects/Pacherring_Vincent/MD7000/PWSonly_maf05_cov12_1996-1991_2006-1996_md7000_100kwindow.csv", header = F)
+iv<-read.csv("~/Projects/Pacherring_Vincent/MD7000/PWSonly_MD7000_intervals_100kwindow.csv", row.names = 1)
+co12<-cbind(iv, co12)                 
+colnames(co12)[4]<-"cov"
+co12$index=1:nrow(co12)
+evens<-paste0("chr",seq(2,26, by=2))  
+co12$color<-"col1"
+co12$color[co12$chrom %in% evens]<-"col2"
+    
+co12$cov[is.nan(co12$cov)]<-NA
+co12$cov[is.infinite(co12$cov)]<-NA
+    
+#add chromosome number
+rows<-data.frame(chr=1:26)
+for (i in 1:26){
+    if (i ==1){
+        rows$n[i]<-nrow(co12[co12$chrom==paste0("chr",i),])
+        rows$middle[i]<-nrow(co12[co12$chrom==paste0("chr",i),])/2
+    }
+    if (i >1){
+        rows$n[i]<-nrow(co12[co12$chrom==paste0("chr",i),])
+        rows$middle[i]<-sum(rows$n[1:(i-1)])+rows$n[i]/2
+    }
+}
+
+
+
+#Annotation infor from SnpEff
+ano12<-read.table("../Output/COV/COVscan/PWSonly_outliers_100k_cov12_annotation", header = F)
+annotations<-data.frame()
+for (i in 1: nrow(ano12)){
+    anns<-unlist(strsplit(ano12$V4[i], "\\,|\\|"))
+    annm<-data.frame(matrix(anns,ncol = 16, byrow = TRUE))
+    annm<-annm[,c(2,3,4,5,8)]
+    colnames(annm)<-c("Effect","Putative_impact","Gene_name","Gene_ID","Feature type")
+    annm<-annm[!duplicated(annm), ]
+    annm$chr<-ano12$V1[i]
+    annm$chr<-ano12$V1[i]
+    annm$pos<-ano12$V2[i]
+    annm$AF<-ano12$V3[i]
+    annotations<-rbind(annotations, annm)
+}     
+annotations <-annotations[!duplicated(annotations), ]
+annotations<-annotations[,c(6:8,1:5)]
+
+write.csv(annotations, "../Output/COV/COVscan/Genes_PWSonly_outliers_100k_cov12.csv", row.names = F)
+
+n<-ceiling(nrow(co12)*0.01) #73
+co12<-co12[order(co12$cov, decreasing = T),]
+co12$top1<-"N"
+co12$top1[1:73]<-"Y"
+
+
+co12$chrom<-factor(co12$chrom, levels=paste0("chr", 1:26))
+co12$top1<-factor(co12$top1, levels=c("Y","N"))
+ggplot(co12, aes(x=start/1000000, y=cov, color=top1))+
+    geom_point(size=0.8, alpha=0.5)+
+    facet_wrap(~chrom, ncol=6)+
+    theme_classic()+
+    scale_color_manual(values=c("deeppink", "lightblue"), guide="none")+
+    ylab("Covariance")+xlab('Postion (Mb)')+
+    ggtitle("PWS 100K window COV12")+
+    scale_x_continuous(labels = comma)
+    annotate("text", x=  , y=  , label=)
+ggsave("../Output/COV/PWSonly_COV12_perChrom_100kWindow2.png", width = 13, height = 10, dpi=300) 
+
+
+
+
+```
+
+
+
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+af<-read.csv("../Output/COV/COVscan/AF_chr16_25.8Mb.csv")
+af$maf<-substr(af$MAF, 3,10)
+af$maf<-as.numeric(af$maf)
+af$AF<-substr(af$Maj, 3,10)
+af$AF<-as.numeric(af$AF)
+    
+ggplot(af, aes(x=Year, y=maf, color=factor(pos)))+
+    geom_point()+
+    geom_path()+ggtitle("MAF (vcftools)")+
+    theme(legend.title=element_blank())
+ggsave("../Output/COV/COVscan/AF_ch16.png", width = 5, height=3, dpi=300)
+
+pops<-c("PWS91","PWS96","PWS07","PWS17")
+yr<-c(1991,1996,2007,2017)
+maf<-data.frame()
+for (i in 1:4){
+    af2<-read.table(paste0("../Data/new_vcf/AF/PWSonly_angsd/PWSonly_",pops[i],".mafs"),sep="\t", header = T)
+    af2<-af2[af2$chromo=="chr16"&af2$position>=25804900&af2$position<=25899395,]
+    af2$year<-yr[i]
+    maf<-rbind(maf,af2)
+}
+
+write.csv(maf,"../Output/COV/COVscan/AF_angsd_chr16_25.8Mb.csv")
+
+
+ggplot(maf, aes(x=year, y=knownEM, color=factor(position)))+
+    geom_point()+
+    geom_path()+ggtitle("MAF (ANGSD)")+
+    ylab("maf")+
+    theme(legend.title=element_blank())
+ggsave("../Output/COV/COVscan/AF_ch16_angsd.png", width = 5, height=3, dpi=300)
+
+```
+
+![](../Output/COV/COVscan/AF_ch16_angsd.png)
+
+![](../Output/COV/COVscan/AF_ch16.png)
+
+
+
+

@@ -1,0 +1,10 @@
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep1.out > Y2017_matrix_rep1.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep2.out > Y2017_matrix_rep2.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep3.out > Y2017_matrix_rep3.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep4.out > Y2017_matrix_rep4.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep5.out > Y2017_matrix_rep5.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep6.out > Y2017_matrix_rep6.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep7.out > Y2017_matrix_rep7.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep8.out > Y2017_matrix_rep8.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep9.out > Y2017_matrix_rep9.txt 
+awk '$0 == "VAR-COVAR MATRIX: ITER = 100000" {i=1;next};i && i++ <= 6' Y2017_matrix_rep10.out > Y2017_matrix_rep10.txt 

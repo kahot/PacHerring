@@ -1,0 +1,17 @@
+
+VCFtools - v0.1.13
+(C) Adam Auton and Anthony Marcketta 2009
+
+Parameters as interpreted:
+	--gzvcf Data/new_vcf/PH_DP600_7000_minQ20_minMQ30_NS0.5_maf05.vcf.gz
+	--recode-INFO-all
+	--out Output/BayEnv/Run1_outlier_200kbuffer
+	--recode
+	--bed Output/BayEnv/Run1_outlier_bed_200kbuffer.bed
+
+Using zlib version: 1.2.8
+After filtering, kept 892 out of 892 Individuals
+Outputting VCF file...
+	Read 30 BED file entries.
+After filtering, kept 6525 out of a possible 330482 Sites
+Run Time = 42.00 seconds

@@ -943,3 +943,42 @@ genenames2<-c(genenames2, longids)
 genenames2<-unique(genenames2)
 
 write.table(genenames2, paste0("Output/COV/annotation/PWS_",compa[i],"_10k_outlier_genenames_list.txt"), quote=F, row.names = F, col.names = F)
+
+
+
+########################################
+### Y 2017 populations ###
+
+
+pops<-c("CA","WA","BC","SS","PWS","TB")
+Variance<-data.frame()
+
+#covariance output file
+cov<-read.csv("~/Projects/Pacherring_Vincent/2017/GW_Covs_interPop2017_100k_win.csv", header = F)
+        
+ci<-read.csv("~/Projects/Pacherring_Vincent/2017/GW_COV_InterpopY2017_CIs.csv")
+ci<-ci[,-1]
+
+covs<-data.frame(pops=c("CA-WA-BC",'WA-BC-SS',"BC-SS-PWS","SS-PWS-TB" ))    
+covs$cov<-c(cov[1,2],cov[2,3],cov[3,4],cov[4,5])
+covs$location<-1:4
+#attach ci info
+covs$ci_l<-c(ci[1,2], ci[2,3], ci[3,4], ci[4,5], ci[5,6])
+covs$ci_u<-c(ci[5,2], ci[6,3], ci[7,4], ci[8,5], ci[9,6])
+        
+covs$ci_l<-as.numeric(covs$ci_l)
+covs$ci_u<-as.numeric(covs$ci_u)
+covs$pops<-factor(covs$pops, levels=c("CA-WA-BC",'WA-BC-SS',"BC-SS-PWS","SS-PWS-TB" ))
+ggplot(data=covs, aes(x=pops, y=cov, color=pops))+
+    geom_point(size=3)+
+    geom_errorbar(data=covs, aes(x=pops, y=cov, ymin=ci_l, ymax=ci_u), width=.2)+
+    ylab("Covariance")+xlab('')+theme_classic()+
+    scale_color_manual(values=cols, guide="none")+
+    geom_hline(yintercept = 0,color="gray70", size=0.3)
+
+ggsave("Output/COV/Y2017_overLatitude_Cov_100k.window_new.png",width = 4.7, height = 3, dpi=300)
+    
+
+## For new MD5000 vcf file
+winsize<-c("100k","1M")
+

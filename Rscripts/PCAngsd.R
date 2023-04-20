@@ -8,13 +8,13 @@ pop_info<-read.csv("Data/Sample_metadata_892pops.csv")
 pop_info<-pop_info[,c("Sample","pop","Year.Collected")]
 colnames(pop_info)[3]<-"year"
 
-
+cols
+"#56b4e9" "#cc79a7" "#009e73" "#0072b2" "#d55e00" "#e69f00" "#f0e442"
 
 ##### Look at PCA for each chromosome
 Plots<-list()
 #no results for chr24
 chs<-c(1:23,25:26)
-i=12
 for (i in 1:length(chs)){
     C <- as.matrix(read.table(paste0("Data/PCAangsd/MD7000_maf05_chr",chs[i],".cov")))
     e <- eigen(C)
@@ -49,6 +49,14 @@ for (i in 1:length(chs)){
 pdf("Output/PCA/PCA_byChromosome_all.pdf",width = 35, height = 30)
 do.call(grid.arrange, c(Plots, ncol=5))
 dev.off()
+
+
+for (i in 1:length(Plots)){
+    p<-Plots[[i]]
+    if (i>=24) ggsave(paste0("Output/PCA/PCA_Chr",i+1,".png"), plot=p, width=4,height=3.5, dpi=300)
+    else ggsave(paste0("Output/PCA/PCA_Chr",i,".png"), plot=p, width=6,height=5, dpi=300)
+}
+
 
 
 #chr 12
@@ -129,6 +137,11 @@ pdf("Output/PCA/noTB_PCA_byChromosome.pdf",width = 35, height = 30)
 do.call(grid.arrange, c(plots, ncol=5))
 dev.off()
 
+for (i in 1:length(plots)){
+    p<-plots[[i]]
+    if (i>=24) ggsave(paste0("Output/PCA/PCA_noTB_Chr",i+1,".png"), plot=p, width=4,height=3.5, dpi=300)
+    else ggsave(paste0("Output/PCA/PCA_noTB_Chr",i,".png"), plot=p, width=6,height=5, dpi=300)
+}
 
 
 ### All pops combined
@@ -142,6 +155,7 @@ pca <-data.frame(Sample=pop_info$Sample,
                  PC3=e$vectors[,3],PC4=e$vectors[,4],
                  PC5=e$vectors[,5],PC6=e$vectors[,6],
                  PC7=e$vectors[,7],PC8=e$vectors[,8],
+                 PC9=e$vectors[,9],PC10=e$vectors[,10],
                  stringsAsFactors=FALSE)
 
 prop_explained <- c()
@@ -149,7 +163,9 @@ for (s in e$values[1:10]) {
     #print(s / sum(e$values))
     prop_explained <- c(prop_explained,round(((s / sum(e$values))*100),2))
 }
-write.csv(pca,"Output/PCA/pca_allPops.csv", row.names = F)
+#write.csv(pca,"Output/PCA/pca_allPops.csv", row.names = F)
+#pca<-read.csv("Output/PCA/pca_allPops.csv")
+
 pca$pop<-factor(pca$pop, levels=c("TB","PWS","SS", "BC","WA","CA"))
 
 ggplot()+

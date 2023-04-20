@@ -47,7 +47,7 @@ for (i in 1:length(pops)){
 }
 write.csv(thetas, "Output/Pi/Pi_windows_all_pop.csv")
 
-#thetas<-read.csv("Output/Pi/Pi_windows_all_pop.csv", row.names = 1)
+thetas<-read.csv("Output/Pi/Pi_windows_all_pop.csv", row.names = 1)
 
 png("Output/Pi/Pi_all_pops_line.png", height = 15, width = 20, res=150, units = "in")
 do.call(grid.arrange, c(Plots, ncol=4))
@@ -86,6 +86,7 @@ for (i in 1:length(pops)){
 }
 write.csv(pi, "Output/Pi/mean_pi_byChrom.csv")
 
+pi<-read.csv("Output/Pi/mean_pi_byChrom.csv", row.names = 1)
 library(reshape2)
 library(colorspace)
 cols<-qualitative_hcl(5, palette="Dark3")

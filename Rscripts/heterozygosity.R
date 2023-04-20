@@ -35,7 +35,7 @@ for (i in 1:length(files)){
 ##########
 
 ####### 
-# Calculate Ho and He from bcftools stats output files
+# Calculate Ho and He from bcftools stats output files (window based)
 
 sfiles<-list.files("Data/het/", pattern="output")
 pop_info<-read.csv("Data/Sample_metadata_892pops.csv")
@@ -419,5 +419,57 @@ ggplot()+
     theme_classic()+ylab("Pi")+xlab('')+
     theme(panel.grid.major.x = element_blank())
 ggsave("Output/Stats_window/pi/Pi_from_Theta_joe.pdf", width = 8, height = 5 )
+
+
+
+### Ho vs. He for inversion
+pop_info<-read.csv("Data/Sample_metadata_892pops.csv")
+pops<-unique(pop_info$Population.Year)
+
+c12<-read.csv("Output/PCA/chr12_PCAgroups.csv")
+
+summary<-data.frame(pop.yr=pops)
+for(i in 1: length(pops)){
+    df<-c12[c12$yr.pop==pops[i],]
+    if(pops[i] %in% c("TB91","TB96","TB06","TB17")){
+        sum<-data.frame(table(df$Group))
+        summary$Group1[i]<-sum$Freq[sum$Var1=="TB_Group1"]
+        summary$Group2[i]<-sum$Freq[sum$Var1=="TB_Group2"]
+        if("TB_Group3" %in% sum$Var1){
+            summary$Group3[i]<-sum$Freq[sum$Var1=="TB_Group3"]
+        }
+        else {summary$Group3[i]<-0}
+    }
+    
+    if(!(pops[i] %in% c("TB91","TB96","TB06","TB17"))){
+        sum<-data.frame(table(df$Group))
+        summary$Group1[i]<-sum$Freq[sum$Var1=="Group1"]
+        summary$Group2[i]<-sum$Freq[sum$Var1=="Group2"]
+        if("Group3" %in% sum$Var1){
+            summary$Group3[i]<-sum$Freq[sum$Var1=="Group3"]
+        }
+        else {summary$Group3[i]<-0}
+    }
+    
+}
+
+summary$p<-(2*summary$Group1+summary$Group2)/(rowSums(summary[c("Group1","Group2","Group3")])*2)
+summary$q<-(2*summary$Group3+summary$Group2)/(rowSums(summary[c("Group1","Group2","Group3")])*2)
+summary$He<-2*summary$p*summary$q
+summary$Ho<-summary$Group2/rowSums(summary[c("Group1","Group2","Group3")])
+
+dfm<-melt(summary[,c("pop.yr","He","Ho")],id.vars="pop.yr")
+
+pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
+dfm$pop.yr<-factor(dfm$pop.yr, levels=pops)
+
+ggplot(dfm,aes(x=pop.yr, y=value, fill=variable))+
+    geom_point(position=position_dodge(width=0.01),size=3.5,shape=21, color="gray")+
+    theme_classic()+ylab("Heterozygosity")+
+    theme(legend.title = element_blank())+
+    scale_fill_manual(values=c("#7570b3CC","#e7298aCC"))
+ggsave("Output/chr12/Expected_ovserved_hetero_inversion.png", height = 3.5, width = 5.5, dpi=300)    
+
+
 
 

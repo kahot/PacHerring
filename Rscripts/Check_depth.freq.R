@@ -43,6 +43,26 @@ FK$chr<-gsub("_","",substr(FK$snp,1,5))
 FK$pos<-as.integer(gsub("chr\\d+\\_","", FK$snp))
 write.csv(FK,"Output/VCF/freq_newvcf_MD7000.csv")
 
+## Read depth info
+dpk <- extract.gt(vcf_k, element = "DP", as.numeric=T)
+df.dp<-data.frame(dpk)
+df.dp2<-apply(df.dp, 1, as.integer)
+
+adk1 <- masplit(adk, record = 1)
+adk2 <- masplit(adk, record = 2)
+
+adk_1sum<-rowSums(adk1, na.rm=T)
+adk_2sum<-rowSums(adk2, na.rm=T)
+
+freqk <- adk_2sum/(adk_1sum+adk_2sum)
+
+FK<-data.frame(snp=rownames(adk))
+FK$freq<-freqk
+FK$chr<-gsub("_","",substr(FK$snp,1,5))
+FK$pos<-as.integer(gsub("chr\\d+\\_","", FK$snp))
+write.csv(FK,"Output/VCF/freq_newvcf_MD7000.csv")
+
+
 
 #Combine the data
 FJ$vcf<-"MD2000"

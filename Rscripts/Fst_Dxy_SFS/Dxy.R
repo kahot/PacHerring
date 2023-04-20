@@ -7,6 +7,36 @@ library(gridExtra)
 library(windowscanr)
 source("Rscripts/BaseScripts.R")
 
+#Use calcDxy.R (https://github.com/mfumagalli/ngsPopGen/blob/master/scripts/calcDxy.R) using mafs from angsd
+
+#create a script to run calcDxy.R for population pairs 
+pwss<-c("PWS91","PWS96","PWS07","PWS17")
+tbs<-c("TB91","TB96","TB06","TB17")
+sss<-c("SS96","SS06","SS17")
+y17<-c("TB17","PWS17","SS17","BC17","WA17","CA17")
+comb1<-combn(pwss, 2)
+comb1<-t(comb1)
+comb2<-combn(tbs, 2)
+comb2<-t(comb2)
+comb3<-combn(sss, 2)
+comb3<-t(comb3)
+comb4<-combn(y17, 2)
+comb4<-data.frame(t(comb4))
+comb<-data.frame(rbind(comb1, comb2, comb3))
+comb$Y2017<-"N"
+comb4$Y2017<-"Y"
+comb<-rbind(comb, comb4)
+
+
+sink("Scripts/calculateDxy/run_calcDxy.sh")
+cat("#!/bin/bash \n\n")
+for (i in 1: nrow(comb)){
+    cat(paste0("Rscript calcDxy.R  -p ",comb[i,1]," --popA='",comb[i,1],".mafs' -q ",comb[i,2], " --popB='",comb[i,2],".mafs'\n"))
+    cat(paste0("mv Dxy_persite.txt Dxy_persite_",comb[i,1],"_",comb[i,2],".txt \n"))
+}
+sink(NULL)
+#
+
 
 #estimate summary statistics for two populations
 
@@ -34,7 +64,7 @@ comb3<-combn(sss, 2)
 comb3<-t(comb3)
 comb4<-combn(y17, 2)
 comb4<-t(comb4)#PWS
-Plots<-list()
+
 for (i in 1: nrow(comb1)){
     pop1<-comb1[i,1]
     pop2<-comb1[i,2]
@@ -86,6 +116,64 @@ dev.off()
 #png("Output/Dxy//Dxy_PWS_md7000.png", height = 8, width = 18, res=150, units = "in")
 #grid.arrange(Plots1[[6]], Plots1[[3]], Plots1[[1]], Plots1[[2]],Plots1[[4]],Plots1[[5]], ncol=3)
 #dev.off()
+
+for (i in 1: nrow(comb2)){
+    pop1<-comb2[i,1]
+    pop2<-comb2[i,2]
+    
+    allfreq1 <- read.delim(paste0('Data/new_vcf/AF/',pop1,'.mafs'))
+    allfreq2 <- read.delim(paste0('Data/new_vcf/AF/',pop2,'.mafs'))
+    
+    
+    ### Manipulating the table and print dxy table
+    allfreq <- merge(allfreq1, allfreq2, by=c("chromo","position"))
+    allfreq <- allfreq[order(allfreq$chromo, allfreq$position),]
+    # -> Actual dxy calculation
+    allfreq <- transform(allfreq, dxy=(knownEM.x*(1-knownEM.y))+(knownEM.y*(1-knownEM.x)))
+    
+    rol_win <- winScan(x = allfreq, 
+                       groups = "chromo", 
+                       position = "position", 
+                       values = c("dxy"), 
+                       win_size = 50000,
+                       win_step = 10000,
+                       funs = c("sum"))
+    rol_win$dxy <- rol_win$dxy_sum/50000
+    
+    write.csv(rol_win, paste0("Output/Dxy/",pop1,"_",pop2,"_Dxy_50kwin_10kstep.csv"))
+}
+
+for (i in 1: nrow(comb3)){
+    pop1<-comb3[i,1]
+    pop2<-comb3[i,2]
+    allfreq1 <- read.delim(paste0('Data/new_vcf/AF/',pop1,'.mafs'))
+    allfreq2 <- read.delim(paste0('Data/new_vcf/AF/',pop2,'.mafs'))
+    allfreq <- merge(allfreq1, allfreq2, by=c("chromo","position"))
+    allfreq <- allfreq[order(allfreq$chromo, allfreq$position),]
+    allfreq <- transform(allfreq, dxy=(knownEM.x*(1-knownEM.y))+(knownEM.y*(1-knownEM.x)))
+    
+    rol_win <- winScan(x = allfreq, groups = "chromo",position = "position", 
+                       values = c("dxy"), win_size = 50000,win_step = 10000,funs = c("sum"))
+    rol_win$dxy <- rol_win$dxy_sum/50000
+    write.csv(rol_win, paste0("Output/Dxy/",pop1,"_",pop2,"_Dxy_50kwin_10kstep.csv"))
+}
+
+for (i in 1: nrow(comb4)){
+    pop1<-comb4[i,1]
+    pop2<-comb4[i,2]
+    allfreq1 <- read.delim(paste0('Data/new_vcf/AF/',pop1,'.mafs'))
+    allfreq2 <- read.delim(paste0('Data/new_vcf/AF/',pop2,'.mafs'))
+    allfreq <- merge(allfreq1, allfreq2, by=c("chromo","position"))
+    allfreq <- allfreq[order(allfreq$chromo, allfreq$position),]
+    allfreq <- transform(allfreq, dxy=(knownEM.x*(1-knownEM.y))+(knownEM.y*(1-knownEM.x)))
+    
+    rol_win <- winScan(x = allfreq, groups = "chromo",position = "position", 
+                       values = c("dxy"), win_size = 50000,win_step = 10000,funs = c("sum"))
+    rol_win$dxy <- rol_win$dxy_sum/50000
+    write.csv(rol_win, paste0("Output/Dxy/",pop1,"_",pop2,"_Dxy_50kwin_10kstep.csv"))
+}
+
+
 
 
 #Dxy comparison
@@ -303,3 +391,5 @@ n=13:15
 png("Output/Dxy//Dxy_Y2017_md7000_line3.png", height = 5, width = 22, res=150, units = "in")
 do.call(grid.arrange, c(Plots4[n], ncol=3))
 dev.off()
+
+

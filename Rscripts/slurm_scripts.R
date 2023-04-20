@@ -836,7 +836,7 @@ for (i in 1:10){
 }
 sink(NULL)
 
-#####  for differente genes in the ahR pathway
+#####  for different genes in the ahR pathway
 beds<-list.files("Output/CNV/ahr/bed")
 for (j in 1: length(beds)) {
     gene<-gsub(".bed","",beds[j])
@@ -1836,8 +1836,7 @@ cat("#SBATCH --time=24:00:00
 cat("\n")
 cat("module load angsd\n\n")
 
-
-for (i in 5:10) {
+for (i in 2:5) {
     sink(paste0("Data/Slurmscripts/RunNGSadmix2.",i,".sh"))
     cat("#!/bin/bash -l\n\n")
     cat(paste0("#SBATCH --job-name=admix2.",i,"\n"))
@@ -1996,4 +1995,208 @@ cat("gzip /home/ktist/ph/data/new_vcf/MD7000/beagle/PWS.SS.WA2017_BEAGLE.PL \n\n
 cat("python /home/jamcgirr/apps/pcangsd/pcangsd.py -beagle /home/ktist/ph/data/new_vcf/MD7000/beagle/PWS.SS.WA2017_BEAGLE.PL.gz -o /home/ktist/ph/data/angsd/PCAngsd/PWS.SS.WA2017 -threads 16 \n")
 sink(NULL)
     
+
+## Create new SAF files with -doIBS in ANGSD
+pops_info<-read.csv("Data/Sample_metadata_892pops.csv")
+pops<-unique(pops_info$Population.Year)
+for (i in 1: length(pops)){
+    sink(paste0("Data/Slurmscripts/saf_ibs_",pops[i],".sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=saf",pops[i],"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 
+#SBATCH --nodes=4 \n")
+    cat(paste0("#SBATCH --error saf",pops[i],".err\n"))
+    cat("#SBATCH --time=144:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    cat(paste0("angsd -bam /home/ktist/ph/data/angsd/samples/",pops[i],".txt -doSaf 1 -doMajorMinor 1 -GL 2 -doMaf 1 -doCounts 1 -doGlf 3 -doIBS 1 -anc /home/jamcgirr/ph/data/c_harengus/c.harengus.fa -ref /home/jamcgirr/ph/data/c_harengus/c.harengus.fa -minMapQ 30 -minQ 20 -P 24 -uniqueOnly 1 -remove_bads 1 -only_proper_pairs 1 -trim 0 -C 50 -minInd 20 -setMaxDepth 1000 -out /home/ktist/ph/data/angsd/SFS/fromBam/", pops[i],"_ibs
+ \n"))
+    sink(NULL)
+}
+
+
+for (i in 1: length(pops)){
+    sink(paste0("Data/Slurmscripts/sfs_ibs_",pops[i],".step2.sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=sfs",pops[i],"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error sfs",pops[i],".err\n"))
+    cat("#SBATCH --time=144:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    for (j in 1:26){
+        cat(paste0("/home/jamcgirr/apps/angsd_sep_20/angsd/misc/realSFS /home/ktist/ph/data/angsd/SFS/fromBam/",pops[i],"_ibs.saf.idx -P 24 -r chr",i," > /home/ktist/ph/data/angsd/SFS/fromBam/IBS/",pops[i],"_unfolded_chr",i,".sfs \n")) 
+    }
+sink(NULL)
+}
+
+
+for (i in 1: length(pops)){
+    sink(paste0("Data/Slurmscripts/sfs_ibs_theta_",pops[i],".step3.sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=theta",pops[i],"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error theta",pops[i],".err\n"))
+    cat("#SBATCH --time=144:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    
+    cat(paste0("/home/jamcgirr/apps/angsd_sep_20/angsd/misc/realSFS saf2theta /home/ktist/ph/data/angsd/SFS/fromBam/", pops[i],"_ibs.saf.idx -sfs /home/ktist/ph/data/angsd/SFS/fromBam/IBS/", pops[i],"_unfolded.sfs -outname /home/ktist/ph/data/angsd/SFS/fromBam/", pops[i],"_ibs \n"))
+    cat(paste0("/home/jamcgirr/apps/angsd_sep_20/angsd/misc/thetaStat do_stat /home/ktist/ph/data/angsd/SFS/fromBam/", pops[i],"_ibs.thetas.idx \n"))
+    cat(paste0("/home/jamcgirr/apps/angsd_sep_20/angsd/misc/thetaStat do_stat /home/ktist/ph/data/angsd/SFS/fromBam/", pops[i],"_ibs.thetas.idx -win 50000 -step 10000 -outnames /home/ktist/ph/data/angsd/SFS/fromBam/", pops[i],"_theta_ibs_50kwin_10kstep \n"))
+
+    sink(NULL)
+}
+
+#folded version
+
+for (i in 1: length(pops)){
+    sink(paste0("Data/Slurmscripts/sfs_folded_ibs_",pops[i],".step2.sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=sfsF",pops[i],"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error sfsF",pops[i],".err\n"))
+    cat("#SBATCH --time=144:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    for (j in 1:26){
+        cat(paste0("/home/jamcgirr/apps/angsd_sep_20/angsd/misc/realSFS /home/ktist/ph/data/angsd/SFS/fromBam/",pops[i],"_ibs.saf.idx -P 24 -r chr",j," -fold 1  > /home/ktist/ph/data/angsd/SFS/fromBam/folded/",pops[i],"_folded_chr",j,".sfs \n")) 
+    }
+    sink(NULL)
+}
+
+
+for (i in 1: length(pops)){
+    sink(paste0("Data/Slurmscripts/sfs_folded_ibs_theta_",pops[i],".step3.sh"))
+    cat("#!/bin/bash -l\n\n")
+    cat(paste0("#SBATCH --job-name=theta",pops[i],"\n"))
+    cat("#SBATCH --mem=16G
+#SBATCH --ntasks=8 \n")
+    cat(paste0("#SBATCH --error theta",pops[i],".err\n"))
+    cat("#SBATCH --time=144:00:00
+#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc
+#SBATCH --mail-type=ALL
+#SBATCH -p high \n")
+    cat("\n")
+    cat("module load angsd\n\n")
+    
+    cat(paste0("/home/jamcgirr/apps/angsd_sep_20/angsd/misc/realSFS saf2theta -fold 1 /home/ktist/ph/data/angsd/SFS/fromBam/", pops[i],"_ibs.saf.idx -sfs /home/ktist/ph/data/angsd/SFS/fromBam/folded/", pops[i],"_folded.sfs -outname /home/ktist/ph/data/angsd/SFS/fromBam/folded/", pops[i],"_folded_ibs \n"))
+    cat(paste0("/home/jamcgirr/apps/angsd_sep_20/angsd/misc/thetaStat do_stat /home/ktist/ph/data/angsd/SFS/fromBam/folded/", pops[i],"_folded_ibs.thetas.idx \n"))
+    cat(paste0("/home/jamcgirr/apps/angsd_sep_20/angsd/misc/thetaStat do_stat /home/ktist/ph/data/angsd/SFS/fromBam/folded/", pops[i],"_folded_ibs.thetas.idx -win 50000 -step 10000 -outnames /home/ktist/ph/data/angsd/SFS/fromBam/folded/", pops[i],"_folded_theta_ibs_50kwin_10kstep \n"))
+    
+    sink(NULL)
+}
+
+# Analyze coverage data using bedtools
+#create .bed file for 5k window
+
+chsize<-read.table("Data/new_vcf/chr_sizes.bed")
+for (i in 1:nrow(chrsize)){
+    sink()
+}
+
+library(DataCombine)
+for (i in 2:26){
+    l<-chsize$V3[i]
+    ends<-seq(1000,l, by=1000)
+    start<-seq(1,l, by=1000) 
+   
+    new<-data.frame(ch=paste0("chr",i), st=start,en=c(ends, l))
+    new<-InsertRow(new,c("track=e=bedGrapph", '', ''), 1)
+    write.table(new, paste0("Data/bam_depth/bed1k/chr",i,"_1k.bed"), row.names = F, col.names = F, quote = F, sep = "\t")
+}
+
+
+#find *bam | parallel 'bedtools coverage -hist -abam {} -b target_regions.bed | grep ^all > {}.hist.all.txt'
+
+pops_info<-read.csv("Data/Sample_metadata_892pops.csv")
+pops<-unique(pops_info$Population.Year)
+
+bfiles<-list.files("Data/bam_depth/bed5k/")
+pops17<-pops[grep("17",pops)]
+for (i in 1:length(pops17)){
+    pop.df<-pops_info[pops_info$Population.Year==pops[i],]
+    sink(paste0("Data/Slurmscripts/bedtool", pop,".sh"))
+    cat("#!/bin/bash -l\n")
+    cat(paste0("#SBATCH --job-name=",pop,"Coverage \n"))
+    cat(paste0("#SBATCH --mem=16G \n")) 
+    cat(paste0("#SBATCH --ntasks=8 \n")) 
+    cat(paste0("#SBATCH -e ",pop,"Coverage.err  \n"))
+    cat(paste0("#SBATCH --time=200:00:00  \n"))
+    cat(paste0("#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc \n"))
+    cat(paste0("#SBATCH --mail-type=ALL \n"))
+    cat(paste0("#SBATCH -p high  \n"))
+    cat("\n\n")
+    cat("module load bedtools \n\n") 
+    #for (j in 1: length(bfiles)){
+    for (j in 1:100){
+        for (s in 1:nrow(pop.df)){
+            cat(paste0("parallel 'bedtools coverage -hist -abam /home/eoziolor/phpopg/data/align/", pop.df$Sample[s] ,".bam -b /home/ktist/ph/data/bam_depth/", bfiles[j]," | grep ^all >  /home/ktist/ph/data/coverage/",pop,".",s, ".", j,".hist.all.txt' \n"))
+            
+        }
+    }
+    sink(NULL)
+}
+
+
+# allele count for each population from pruned file
+pops_info<-read.csv("Data/Sample_metadata_892pops.csv")
+pops<-unique(pops_info$Population.Year)
+
+sink("Data/Slurmscripts/subset_prunedVCF.sh")
+cat("#!/bin/bash -l\n")
+cat(paste0("#SBATCH --job-name=subset \n"))
+cat(paste0("#SBATCH --mem=16G \n")) 
+cat(paste0("#SBATCH --ntasks=8 \n")) 
+cat(paste0("#SBATCH -e subset.err  \n"))
+cat(paste0("#SBATCH --time=200:00:00  \n"))
+#cat(paste0("#SBATCH --mail-user=ktist@ucdavis.edu ##email you when job starts,ends,etc \n"))
+#cat(paste0("#SBATCH --mail-type=ALL \n"))
+cat(paste0("#SBATCH -p high  \n"))
+cat("\n\n")
+cat("module load bcftools \n\n") 
+for (i in 1:length(pops)){
+    cat(paste0("bcftools view -Oz -S /home/ktist/ph/data/new_vcf/population/",pops[i],".txt --threads 24  /home/ktist/ph/data/new_vcf/MD7000/PH_pruned_all_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/Pruned_",pops[i],"_maf05.vcf.gz\n")) 
+    cat(paste0("bcftools index /home/ktist/ph/data/new_vcf/MD7000/Pruned_",pops[i],"_maf05.vcf.gz \n")) 
+}
+sink(NULL)
+
+
+## extract allele count data for each population            
+sink("Data/Slurmscripts/extract_AC.sh")
+cat("#!/bin/bash")
+cat("\n")
+cat(paste0("#SBATCH --job-name=AC \n"))
+cat(paste0("#SBATCH --mem=12G \n")) 
+cat(paste0("#SBATCH --ntasks=1 \n")) 
+cat(paste0("#SBATCH -e extractAC.err  \n"))
+cat(paste0("#SBATCH --time=24:00:00  \n"))
+cat(paste0("#SBATCH -p high  \n"))
+cat("\n")
+cat("module load bcftools")     
+cat("\n\n")
+
+for (i in 1: length(pops)){
+    cat(paste0("bcftools query -f '%CHROM  %POS  %INFO/AC  %INFO/AN\n' /home/ktist/ph/data/new_vcf/MD7000/", pops[i],"_maf05.vcf.gz > /home/ktist/ph/data/new_vcf/MD7000/AC_", pops[i],".txt \n"))
+}
+sink(NULL)
+
+
+
 

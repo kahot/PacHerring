@@ -114,61 +114,13 @@ byPopYr
 #13    TB96 0.9357896
 #14    WA17 0.9048108
 
+mean(byPopYr$x) #1.061836
 mean(bam_summary$SD_COVERAGE)
 
-### look at the correlation between read coverage and pi
 
-pops<-c("TB91","TB96","TB06","TB17","PWS91","PWS96","PWS07","PWS17","SS96","SS06","SS17","BC17","WA17","CA17")
-year<-c(1991,1996,2006,2017,1991,1996,2007,2017,1996,2006,2017,2017,2017,2017)
-meanPi<-data.frame(pop.yr=pops, year=year)
-for (i in 1:length(pops)){
-    df<-read.csv(paste0("Output/Pi/",pops[i], "_Pi_pixy_per50kWindow.csv"), row.names =1 )
-    meanPi$mean[i]<-mean(df$pi, na.rm=T)
-    meanPi$pop[i]<-gsub("\\d.+","",pops[i])
-}
 
-colnames(byPopYr)<-c("pop.yr","depth")
-data<-merge(byPopYr, meanPi, by="pop.yr")
 
-cor.test(data$depth, data$mean, method = "spearman")
-#Spearman's rank correlation rho
-#
-#data:  data$depth and data$mean
-#S = 114, p-value = 0.002992
-#alternative hypothesis: true rho is not equal to 0
-#sample estimates:
-#      rho 
-#0.7494505 
 
-ho<-read.csv("Output/Stats_window/Heterozygosity_pop_summary.csv", row.names = 1)
-data<-merge(data, ho[,c("pop","Ho_mean")], by.x = "pop.yr", by.y = "pop")
-
-#cor.test(data$depth, data$Ho_mean, method = "spearman")
-#data:  data$depth and data$Ho_mean
-#S = 36, p-value < 2.2e-16
-#alternative hypothesis: true rho is not equal to 0
-#sample estimates:
-#    rho 
-#0.9208791 
-data$pop<-factor(data$pop, levels=c("TB","PWS","SS", "BC","WA","CA"))
-ggplot(data, aes(x=depth, y=mean, color=pop))+
-    geom_point(size=3)+
-    xlab("Mean read depth")+
-    ylab(expression(paste("Mean ", pi)))+
-    theme_bw()+
-    annotate('text', x=1.28, y=0.00325, label="rho = 0.75**", size=3)+
-    scale_color_manual(values=cols)+ theme(legend.title = element_blank())
-ggsave("Output/QC/Cor_plot_depth.vs.Pi.png", width = 5.2, height = 4, dpi=300)
-
-ggplot(data, aes(x=depth, y=Ho_mean,color=pop))+
-    geom_point(size=3)+
-    xlab("Mean read depth")+
-    ylab("Mean Ho")+
-    theme_bw()+  scale_color_manual(values=cols)+
-    annotate('text', x=1.28, y=0.0041, label="rho = 0.92***", size=3)+
-    theme(legend.title = element_blank())
-ggsave("Output/QC/Cor_plot_depth.vs.Ho.png", width = 5.2, height = 4, dpi=300)
-### mean number of reads per sample (using samtools to get the number of mapped readds)
 
 
 reads<-popinfo
@@ -225,3 +177,28 @@ table(pops$Sequence.Plate, pops$Population.Year)
 #20    0   16     0     0     0     0    2    0    0    0    0    0    8    8
 
 # No consistent plate contributing high pi (PWS07, CA17 PWS96 are the three highest pi)
+
+
+
+
+
+
+
+
+### total reads
+# use samtools to extract bam statistics (NoReads.sh)
+
+files<-list.files("Data/QC/", pattern=".stats.txt")
+reads<-data.frame(file=gsub(".stats.txt",'',files))
+for (i in 1: length(files)){
+    df<-read.table(paste0("Data/QC/", files[i]), fill = T)
+    reads$Total[i]<-df[1,1]
+    reads$Mapped[i]<-df[7,1]
+}
+
+write.csv(reads, "Output/QC/Bam_TotalReads_summary.csv")
+
+reads$Total<-as.integer(reads$Total)
+sum(reads$Total)
+#9,065,600,620
+

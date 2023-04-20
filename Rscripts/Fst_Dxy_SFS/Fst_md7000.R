@@ -1021,3 +1021,33 @@ findGene("DDAH1")
 findGene("vaspa")
 findGene("hoxa2b")
 Ano2[Ano2$Gene_name2=="hoxa2b",]
+
+
+
+### For Tony (PWS, SS, WA comparison)
+
+fst_mat<-read.csv("Output/fst_pbs/MD7000/Fst_matrix_2017_all.csv", row.names = 1)
+
+fst_mat<-fst_mat[-1,-1]
+fst_mat<-fst_mat[c(1,2,4),c(1,2,4)]
+
+fst_mat$pop<-rownames(fst_mat)
+# Melt the correlation matrix
+melted_cormat <- melt(fst_mat, na.rm = TRUE, id.vars='pop')
+
+melted_cormat[melted_cormat==0]<-NA
+
+ggplot(data = melted_cormat, aes(pop, variable, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradientn(colors=c("white", "steelblue"), limits=c(0, (max(melted_cormat$value, na.rm=T)+0.005)),na.value="gray90", 
+                         name="Fst")+
+    theme_minimal()+ xlab("")+ylab("")+
+    theme(axis.text.x = element_text(angle = 0, vjust = 0, 
+                                     size = 12, hjust = 0.5))+
+    theme(axis.text.y = element_text(size = 12))+
+    coord_fixed()+
+    geom_text(aes(pop, variable, label = value),  size = 5)
+    #scale_color_manual(values=c("black", "white"), guide='none')
+
+ggsave("Output/fst_pbs/MD7000/Fst_matrix_PWS_SS_WA.png", height = 5, width = 5, dpi=300)
+
